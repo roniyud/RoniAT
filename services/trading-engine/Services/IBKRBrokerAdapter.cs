@@ -249,17 +249,41 @@ public sealed class IBKRBrokerAdapter(
         return Task.FromResult(new BrokerActionResult(0, 0));
     }
 
-    public Task<BrokerActionResult> ClosePositionAsync(string symbol, TradingDbContext db)
+    public async Task<BrokerActionResult> ClosePositionAsync(string symbol, TradingDbContext db)
     {
-        RecordBlockedAction(db, "ibkr.close_position_blocked", $$"""
-        {"symbol":"{{symbol}}","reason":"IBKR adapter skeleton does not close live positions"}
-        """);
+        var normalizedSymbol = symbol.Trim().ToUpperInvariant();
+        var position = await db.Positions.SingleOrDefaultAsync(item => item.Symbol == normalizedSymbol);
+        if (position is null)
+        {
+            db.AuditLogs.Add(AuditLogRecord.BrokerAction(
+                "ibkr.close_position_skipped",
+                $"No system-owned IBKR position found for {normalizedSymbol}"));
+
+            return new BrokerActionResult(0, 0);
+        }
+
+        var closeDirection = position.Direction == "LONG" ? "SHORT" : "LONG";
+        var result = await PlaceMarketOrderAsync(
+            normalizedSymbol,
+            closeDirection,
+            position.Quantity,
+            position.AveragePrice,
+            db);
+
+        if (!result.Ok)
+        {
+            db.AuditLogs.Add(AuditLogRecord.BrokerAction(
+                "ibkr.close_position_failed",
+                $"IBKR close position failed for {normalizedSymbol}: {result.Message}"));
+
+            return new BrokerActionResult(0, 0);
+        }
 
         db.AuditLogs.Add(AuditLogRecord.BrokerAction(
-            "ibkr.close_position_blocked",
-            $"IBKR skeleton blocked close position for {symbol}"));
+            "ibkr.position_closed",
+            $"IBKR position close submitted for {normalizedSymbol} {position.Direction} {position.Quantity}"));
 
-        return Task.FromResult(new BrokerActionResult(0, 0));
+        return new BrokerActionResult(0, 1);
     }
 
     public Task<BrokerActionResult> FlattenAsync(TradingDbContext db)

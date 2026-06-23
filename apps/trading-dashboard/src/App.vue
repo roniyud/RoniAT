@@ -378,7 +378,7 @@ async function handleCancelWorkingOrders(symbol?: string) {
   const label = symbol ? `for ${symbol}` : 'for all symbols'
   await runAction(
     `cancel-${symbol || 'all'}`,
-    `Cancel all working paper orders ${label}?`,
+    `Cancel all working broker orders ${label}?`,
     () => cancelWorkingOrders(symbol),
   )
 }
@@ -386,7 +386,7 @@ async function handleCancelWorkingOrders(symbol?: string) {
 async function handleClosePosition(symbol: string) {
   await runAction(
     `close-${symbol}`,
-    `Close the paper position for ${symbol}?`,
+    `Close the broker position for ${symbol}?`,
     () => closePosition(symbol),
   )
 }
@@ -394,7 +394,7 @@ async function handleClosePosition(symbol: string) {
 async function handleFlatten() {
   await runAction(
     'flatten',
-    'Flatten all paper positions and cancel all working paper orders?',
+    'Flatten all broker positions and cancel all working broker orders?',
     () => flattenPaperAccount(),
   )
 }
