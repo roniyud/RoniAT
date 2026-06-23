@@ -868,6 +868,12 @@ watch([chartSymbol, selectedTimeframe], () => {
             <div>
               <span>Broker Status</span>
               <strong>{{ brokerTestResult?.message || brokerStatus?.message || 'Paper broker active' }}</strong>
+              <small v-if="brokerTestResult" class="broker-connection-details">
+                API {{ brokerTestResult.handshake_ok ? 'handshake ok' : 'handshake missing' }}
+                <template v-if="brokerTestResult.server_version"> / server {{ brokerTestResult.server_version }}</template>
+                / selected {{ brokerTestResult.selected_account || '-' }}
+                / accounts {{ brokerTestResult.managed_accounts.length ? brokerTestResult.managed_accounts.join(', ') : '-' }}
+              </small>
             </div>
             <div class="broker-status-flags">
               <span class="status-pill" :class="brokerStatus?.configured ? 'paper-position-opened' : 'rejected-by-risk'">
@@ -878,6 +884,12 @@ watch([chartSymbol, selectedTimeframe], () => {
               </span>
               <span class="status-pill" :class="brokerStatus?.connected ? 'paper-position-opened' : 'rejected-by-risk'">
                 {{ brokerStatus?.connected ? 'Connected' : 'Disconnected' }}
+              </span>
+              <span v-if="brokerTestResult" class="status-pill" :class="brokerTestResult.handshake_ok ? 'paper-position-opened' : 'rejected-by-risk'">
+                {{ brokerTestResult.handshake_ok ? 'Handshake OK' : 'Handshake Failed' }}
+              </span>
+              <span v-if="brokerTestResult" class="status-pill" :class="brokerTestResult.account_verified ? 'paper-position-opened' : 'rejected-by-risk'">
+                {{ brokerTestResult.account_verified ? 'Account Verified' : 'Account Missing' }}
               </span>
               <span v-if="brokerStatus?.read_only" class="status-pill risk-settings-updated">Read Only</span>
             </div>

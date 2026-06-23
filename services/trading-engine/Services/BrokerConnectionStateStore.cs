@@ -36,6 +36,11 @@ public sealed record BrokerConnectionTestResult(
     string Environment,
     string Host,
     int Port,
+    bool HandshakeOk,
+    bool AccountVerified,
+    IReadOnlyList<string> ManagedAccounts,
+    string? SelectedAccount,
+    int? ServerVersion,
     string Message,
     DateTimeOffset TestedAt
 );

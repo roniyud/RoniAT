@@ -74,6 +74,11 @@ export type BrokerConnectionTestResult = {
   environment: string
   host: string
   port: number
+  handshake_ok: boolean
+  account_verified: boolean
+  managed_accounts: string[]
+  selected_account?: string | null
+  server_version?: number | null
   message: string
   tested_at: string
 }

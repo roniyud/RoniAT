@@ -22,12 +22,12 @@ public sealed class IBKRBrokerAdapter(BrokerSettingsStore settingsStore, BrokerC
             && lastConnection.Host.Equals(settings.Host, StringComparison.OrdinalIgnoreCase)
             && lastConnection.Port == settings.Port;
 
-        var connected = connectionMatchesSettings && lastConnection!.Ok;
+        var connected = connectionMatchesSettings && lastConnection!.HandshakeOk;
 
         var message = connectionMatchesSettings
             ? lastConnection!.Message
             : configured
-            ? settings.Enabled ? $"IBKR {brokerSettings.IbkrEnvironment} skeleton configured; live connection not implemented" : $"IBKR {brokerSettings.IbkrEnvironment} configured but disabled"
+            ? settings.Enabled ? $"IBKR {brokerSettings.IbkrEnvironment} configured; run Test Connection to verify API handshake" : $"IBKR {brokerSettings.IbkrEnvironment} configured but disabled"
             : $"IBKR {brokerSettings.IbkrEnvironment} not configured";
 
         return new BrokerStatus(

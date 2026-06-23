@@ -81,6 +81,7 @@ builder.Services.Configure<BrokerSettings>(options =>
 });
 builder.Services.AddSingleton<BrokerSettingsStore>();
 builder.Services.AddSingleton<BrokerConnectionStateStore>();
+builder.Services.AddScoped<IBKRReadOnlyHandshakeClient>();
 builder.Services.AddScoped<IBKRConnectionTester>();
 builder.Services.AddScoped<PaperBrokerAdapter>();
 builder.Services.AddScoped<IBKRBrokerAdapter>();
@@ -264,9 +265,11 @@ app.MapPut("/api/broker/settings", async (BrokerSettingsUpdateRequest request, B
 app.MapPost("/api/broker/test-connection", async (IBKRConnectionTester tester, TradingDbContext db, IHubContext<TradingHub> hub, CancellationToken cancellationToken) =>
 {
     var result = await tester.TestAsync(cancellationToken);
-    db.AuditLogs.Add(AuditLogRecord.BrokerAction(
-        result.Ok ? "broker.connection_test_succeeded" : "broker.connection_test_failed",
-        $"{result.Mode} {result.Environment} connection test to {result.Host}:{result.Port} - {result.Message}"));
+    foreach (var audit in BuildBrokerConnectionAudit(result))
+    {
+        db.AuditLogs.Add(audit);
+    }
+
     await db.SaveChangesAsync(cancellationToken);
 
     await BroadcastTradingUpdateAsync(hub, result.Ok ? "broker.connection_test_succeeded" : "broker.connection_test_failed", null);
@@ -463,6 +466,41 @@ static string? GetSqlitePath(string connectionString, string contentRootPath)
     return Path.IsPathRooted(path)
         ? path
         : Path.GetFullPath(path, contentRootPath);
+}
+
+static IReadOnlyList<AuditLogRecord> BuildBrokerConnectionAudit(BrokerConnectionTestResult result)
+{
+    if (!result.Mode.Equals("IBKR", StringComparison.OrdinalIgnoreCase))
+    {
+        return
+        [
+            AuditLogRecord.BrokerAction(
+                result.Ok ? "broker.connection_test_succeeded" : "broker.connection_test_failed",
+                $"{result.Mode} {result.Environment} connection test - {result.Message}")
+        ];
+    }
+
+    var logs = new List<AuditLogRecord>
+    {
+        AuditLogRecord.BrokerAction(
+            result.HandshakeOk ? "ibkr.handshake_succeeded" : "ibkr.handshake_failed",
+            $"IBKR {result.Environment} API handshake to {result.Host}:{result.Port} - {result.Message}")
+    };
+
+    if (result.HandshakeOk && !string.IsNullOrWhiteSpace(result.SelectedAccount))
+    {
+        logs.Add(AuditLogRecord.BrokerAction(
+            result.AccountVerified ? "ibkr.account_verified" : "ibkr.account_missing",
+            result.AccountVerified
+                ? $"IBKR {result.Environment} account {result.SelectedAccount} verified"
+                : $"IBKR {result.Environment} account {result.SelectedAccount} was not found"));
+    }
+
+    logs.Add(AuditLogRecord.BrokerAction(
+        result.Ok ? "broker.connection_test_succeeded" : "broker.connection_test_failed",
+        $"{result.Mode} {result.Environment} connection test to {result.Host}:{result.Port} - {result.Message}"));
+
+    return logs;
 }
 
 static Task BroadcastTradingUpdateAsync(IHubContext<TradingHub> hub, string eventType, string? symbol)

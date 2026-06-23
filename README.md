@@ -103,9 +103,9 @@ PUT /api/broker/settings
 POST /api/broker/test-connection
 ```
 
-`IBKR` is currently a skeleton adapter only: it reports configuration status, writes audit/broker events, and blocks live order actions with `broker_blocked` status. It does not connect to TWS/Gateway or place live orders yet.
+`IBKR` is currently a read-only adapter: it can verify an IB Gateway/TWS API session and managed account, writes audit/broker events, and blocks live order actions with `broker_blocked` status. It does not place live orders yet.
 
-The connection test is a TCP reachability check to the configured Gateway host/port. It does not authenticate, subscribe to data, request account state, or place orders.
+The connection test opens an IBKR API socket, waits for the API handshake (`nextValidId`), requests managed accounts, and verifies the configured Paper/Live account when provided. It does not subscribe to data, request positions, or place orders.
 
 IBKR skeleton settings:
 
