@@ -201,6 +201,7 @@ const chartTradeBlockedReason = computed(() => {
   if (riskSettings.value?.emergency_stop_active) return 'Emergency stop is active'
   if (riskSettings.value?.trading_locked) return 'Trading is locked'
   if (!riskSettings.value?.enable_auto_trading) return 'Auto trading is off'
+  if (brokerStatus.value?.read_only) return 'Broker is read-only'
   if (latestChartPrice.value == null) return 'Waiting for chart price'
   return ''
 })

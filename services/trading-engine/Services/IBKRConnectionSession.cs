@@ -21,6 +21,7 @@ public sealed class IBKRConnectionSession(
     private static readonly TimeSpan AccountsTimeout = TimeSpan.FromSeconds(3);
     private static readonly TimeSpan PositionsTimeout = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan HistoricalDataTimeout = TimeSpan.FromSeconds(12);
+    private static readonly TimeSpan OrderStatusTimeout = TimeSpan.FromSeconds(10);
 
     private readonly SemaphoreSlim connectionLock = new(1, 1);
     private int nextMarketDataRequestId = 7000;
@@ -270,6 +271,88 @@ public sealed class IBKRConnectionSession(
             {
                 client.cancelHistoricalData(requestId);
             }
+        }
+        finally
+        {
+            connectionLock.Release();
+        }
+    }
+
+    public async Task<IBKRSubmittedOrder> PlaceMarketOrderAsync(
+        string symbol,
+        string direction,
+        int quantity,
+        CancellationToken cancellationToken = default)
+    {
+        await connectionLock.WaitAsync(cancellationToken);
+
+        try
+        {
+            var brokerSettings = settingsStore.Get();
+            var settings = settingsStore.GetActiveIBKRSettings();
+
+            if (!brokerSettings.Mode.Equals("IBKR", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException("Broker mode is not IBKR");
+            }
+
+            if (!brokerSettings.IbkrEnvironment.Equals("Paper", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException("Live IBKR order placement is not enabled. Switch to Paper.");
+            }
+
+            if (settings.ReadOnly)
+            {
+                throw new InvalidOperationException("IBKR is configured as read-only. Disable read-only before placing Paper orders.");
+            }
+
+            if (quantity <= 0)
+            {
+                throw new ArgumentException("quantity must be greater than zero", nameof(quantity));
+            }
+
+            var result = await EnsureConnectedLockedAsync(cancellationToken);
+            if (!result.HandshakeOk || client?.IsConnected() != true || wrapper is null)
+            {
+                throw new InvalidOperationException(result.Message);
+            }
+
+            var normalizedDirection = direction.Trim().ToUpperInvariant();
+            var action = normalizedDirection switch
+            {
+                "LONG" => "BUY",
+                "SHORT" => "SELL",
+                _ => throw new ArgumentException("direction must be LONG or SHORT", nameof(direction))
+            };
+            var normalizedSymbol = NormalizeDisplaySymbol(symbol);
+            var contract = BuildTradableContract(normalizedSymbol);
+            var orderId = wrapper.TakeNextOrderId();
+            var order = new Order
+            {
+                OrderId = orderId,
+                Action = action,
+                TotalQuantity = quantity,
+                OrderType = "MKT",
+                Tif = "DAY",
+                Account = settings.Account,
+                Transmit = true
+            };
+
+            wrapper.TrackSubmittedOrder(orderId);
+            client.placeOrder(orderId, contract, order);
+
+            var status = await wrapper.WaitForOrderStatusAsync(orderId, OrderStatusTimeout, cancellationToken);
+            return new IBKRSubmittedOrder(
+                OrderId: orderId,
+                Symbol: normalizedSymbol,
+                Direction: normalizedDirection,
+                Quantity: quantity,
+                Status: status.Status,
+                FilledQuantity: status.FilledQuantity,
+                RemainingQuantity: status.RemainingQuantity,
+                AverageFillPrice: status.AverageFillPrice,
+                LastFillPrice: status.LastFillPrice,
+                Message: status.Message);
         }
         finally
         {
@@ -614,17 +697,25 @@ public sealed class IBKRConnectionSession(
         private readonly object positionsLock = new();
         private readonly object historicalDataLock = new();
         private readonly object marketDataLock = new();
+        private readonly object ordersLock = new();
         private readonly List<string> diagnostics = [];
         private readonly Dictionary<int, string> marketDataSymbols = [];
+        private readonly Dictionary<int, OrderStatusSnapshot> orderStatuses = [];
+        private readonly Dictionary<int, TaskCompletionSource<OrderStatusSnapshot>> orderStatusSources = [];
         private List<IBKRPositionSnapshot> positions = [];
         private TaskCompletionSource<IReadOnlyList<IBKRPositionSnapshot>> positionsSource = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private int historicalDataRequestId;
         private List<CandleResponse> historicalCandles = [];
         private TaskCompletionSource<IReadOnlyList<CandleResponse>> historicalDataSource = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int nextOrderId;
 
         public override void nextValidId(int orderId)
         {
             AddDiagnostic($"nextValidId {orderId} received");
+            lock (ordersLock)
+            {
+                nextOrderId = Math.Max(nextOrderId, orderId);
+            }
             handshakeSource.TrySetResult(orderId);
         }
 
@@ -692,6 +783,38 @@ public sealed class IBKRConnectionSession(
                 IsDelayedTick(field) ? "IBKR delayed tick" : "IBKR realtime tick"));
         }
 
+        public override void orderStatus(
+            int orderId,
+            string status,
+            decimal filled,
+            decimal remaining,
+            double avgFillPrice,
+            int permId,
+            int parentId,
+            double lastFillPrice,
+            int clientId,
+            string whyHeld,
+            double mktCapPrice)
+        {
+            var snapshot = new OrderStatusSnapshot(
+                orderId,
+                status,
+                filled,
+                remaining,
+                Convert.ToDecimal(avgFillPrice),
+                Convert.ToDecimal(lastFillPrice),
+                whyHeld);
+
+            lock (ordersLock)
+            {
+                orderStatuses[orderId] = snapshot;
+                if (IsTerminalOrderStatus(status) && orderStatusSources.TryGetValue(orderId, out var source))
+                {
+                    source.TrySetResult(snapshot);
+                }
+            }
+        }
+
         public override void historicalData(int reqId, Bar bar)
         {
             lock (historicalDataLock)
@@ -738,6 +861,7 @@ public sealed class IBKRConnectionSession(
             handshakeSource.TrySetException(new InvalidOperationException("IBKR API connection closed before handshake completed"));
             accountsSource.TrySetException(new InvalidOperationException("IBKR API connection closed before managed accounts were received"));
             historicalDataSource.TrySetException(new InvalidOperationException("IBKR API connection closed before historical data was received"));
+            FailPendingOrders(new InvalidOperationException("IBKR API connection closed before order status was received"));
         }
 
         public override void error(Exception e)
@@ -746,6 +870,7 @@ public sealed class IBKRConnectionSession(
             handshakeSource.TrySetException(e);
             accountsSource.TrySetException(e);
             historicalDataSource.TrySetException(e);
+            FailPendingOrders(e);
         }
 
         public override void error(string str)
@@ -761,6 +886,14 @@ public sealed class IBKRConnectionSession(
             {
                 historicalDataSource.TrySetException(new InvalidOperationException($"IBKR historical data error {errorCode}: {errorMsg}"));
             }
+
+            lock (ordersLock)
+            {
+                if (orderStatusSources.TryGetValue(id, out var source))
+                {
+                    source.TrySetException(new InvalidOperationException($"IBKR order error {errorCode}: {errorMsg}"));
+                }
+            }
         }
 
         public void CaptureReaderError(Exception error)
@@ -770,6 +903,7 @@ public sealed class IBKRConnectionSession(
             accountsSource.TrySetException(error);
             positionsSource.TrySetException(error);
             historicalDataSource.TrySetException(error);
+            FailPendingOrders(error);
         }
 
         public Task WaitForHandshakeAsync(CancellationToken cancellationToken)
@@ -824,6 +958,60 @@ public sealed class IBKRConnectionSession(
             lock (marketDataLock)
             {
                 marketDataSymbols[requestId] = symbol;
+            }
+        }
+
+        public int TakeNextOrderId()
+        {
+            lock (ordersLock)
+            {
+                if (nextOrderId <= 0)
+                {
+                    throw new InvalidOperationException("IBKR nextValidId was not received");
+                }
+
+                return nextOrderId++;
+            }
+        }
+
+        public void TrackSubmittedOrder(int orderId)
+        {
+            lock (ordersLock)
+            {
+                orderStatusSources[orderId] = new TaskCompletionSource<OrderStatusSnapshot>(TaskCreationOptions.RunContinuationsAsynchronously);
+                orderStatuses[orderId] = new OrderStatusSnapshot(orderId, "Submitted", 0, 0, 0, 0, "");
+            }
+        }
+
+        public async Task<OrderStatusSnapshot> WaitForOrderStatusAsync(int orderId, TimeSpan timeout, CancellationToken cancellationToken)
+        {
+            Task<OrderStatusSnapshot>? task;
+            lock (ordersLock)
+            {
+                orderStatusSources.TryGetValue(orderId, out var source);
+                task = source?.Task;
+            }
+
+            if (task is null)
+            {
+                throw new InvalidOperationException($"IBKR order {orderId} is not tracked");
+            }
+
+            using var orderTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            orderTimeout.CancelAfter(timeout);
+
+            try
+            {
+                return await task.WaitAsync(orderTimeout.Token);
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                lock (ordersLock)
+                {
+                    return orderStatuses.TryGetValue(orderId, out var snapshot)
+                        ? snapshot with { Message = "Timed out waiting for final IBKR order status" }
+                        : new OrderStatusSnapshot(orderId, "Submitted", 0, 0, 0, 0, "Timed out waiting for IBKR order status");
+                }
             }
         }
 
@@ -908,6 +1096,25 @@ public sealed class IBKRConnectionSession(
         {
             return field is TickType.DELAYED_LAST;
         }
+
+        private void FailPendingOrders(Exception error)
+        {
+            lock (ordersLock)
+            {
+                foreach (var source in orderStatusSources.Values)
+                {
+                    source.TrySetException(error);
+                }
+            }
+        }
+
+        private static bool IsTerminalOrderStatus(string status)
+        {
+            return status.Equals("Filled", StringComparison.OrdinalIgnoreCase)
+                || status.Equals("Cancelled", StringComparison.OrdinalIgnoreCase)
+                || status.Equals("ApiCancelled", StringComparison.OrdinalIgnoreCase)
+                || status.Equals("Inactive", StringComparison.OrdinalIgnoreCase);
+        }
     }
 
     private sealed record HistoricalDataRequest(string Symbol, Contract Contract, string Duration, string BarSize)
@@ -957,6 +1164,50 @@ public sealed class IBKRConnectionSession(
         }
     }
 
+    private static string NormalizeDisplaySymbol(string symbol)
+    {
+        return (string.IsNullOrWhiteSpace(symbol) ? "MNQ1!" : symbol.Trim().ToUpperInvariant());
+    }
+
+    private static Contract BuildTradableContract(string symbol)
+    {
+        var root = symbol.Replace("1!", "", StringComparison.OrdinalIgnoreCase);
+        if (root is "MNQ" or "NQ" or "MES" or "ES")
+        {
+            return new Contract
+            {
+                Symbol = root,
+                SecType = "FUT",
+                LastTradeDateOrContractMonth = GetNextQuarterlyFuturesMonth(DateTimeOffset.UtcNow),
+                Exchange = "CME",
+                Currency = "USD"
+            };
+        }
+
+        return new Contract
+        {
+            Symbol = root,
+            SecType = "STK",
+            Exchange = "SMART",
+            Currency = "USD"
+        };
+    }
+
+    private static string GetNextQuarterlyFuturesMonth(DateTimeOffset now)
+    {
+        var year = now.Year;
+        var month = now.Month;
+        var quarterlyMonths = new[] { 3, 6, 9, 12 };
+        var targetMonth = quarterlyMonths.FirstOrDefault(candidate => candidate > month || (candidate == month && now.Day <= 15));
+        if (targetMonth == 0)
+        {
+            year++;
+            targetMonth = 3;
+        }
+
+        return $"{year:0000}{targetMonth:00}";
+    }
+
     private sealed record IBKRConnectionKey(
         string Environment,
         string Host,
@@ -975,7 +1226,28 @@ public sealed class IBKRConnectionSession(
         }
     }
 
+    private sealed record OrderStatusSnapshot(
+        int OrderId,
+        string Status,
+        decimal FilledQuantity,
+        decimal RemainingQuantity,
+        decimal AverageFillPrice,
+        decimal LastFillPrice,
+        string Message);
+
     private sealed record IBKRPositionSnapshot(string Symbol, decimal Quantity, decimal AveragePrice);
 
     private sealed record IBKRMarketTick(string Symbol, decimal Price, long Time, string Source);
 }
+
+public sealed record IBKRSubmittedOrder(
+    int OrderId,
+    string Symbol,
+    string Direction,
+    int Quantity,
+    string Status,
+    decimal FilledQuantity,
+    decimal RemainingQuantity,
+    decimal AverageFillPrice,
+    decimal LastFillPrice,
+    string Message);
