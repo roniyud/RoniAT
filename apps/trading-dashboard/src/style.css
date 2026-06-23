@@ -489,7 +489,7 @@ h3 {
 
 .chart-trade-inputs {
   display: grid;
-  grid-template-columns: minmax(96px, 140px);
+  grid-template-columns: minmax(96px, 140px) minmax(84px, 110px);
   gap: 8px;
 }
 
@@ -504,6 +504,17 @@ h3 {
   background: #ffffff;
   font-size: 13px;
   font-weight: 700;
+}
+
+.chart-confirm-toggle {
+  align-self: end;
+}
+
+.chart-confirm-toggle input {
+  width: 18px;
+  height: 18px;
+  margin-top: 12px;
+  accent-color: #13795b;
 }
 
 .chart-trade-actions {

@@ -69,6 +69,7 @@ const brokerTestResult = ref<BrokerConnectionTestResult | null>(null)
 const tradeMessage = ref('')
 const selectedTimeframe = ref<Timeframe>('5m')
 const selectedChartSymbol = ref('MNQ1!')
+const requireChartTradeConfirmation = ref(true)
 const chartCandles = ref<CandlestickData[]>([])
 const chartError = ref('')
 const isChartLoading = ref(false)
@@ -358,8 +359,8 @@ function restartChartRefreshTimer() {
   }, getChartRefreshIntervalMs(selectedTimeframe.value))
 }
 
-async function runAction(actionKey: string, confirmation: string, action: () => Promise<unknown>) {
-  if (!window.confirm(confirmation)) return
+async function runAction(actionKey: string, confirmation: string, action: () => Promise<unknown>, requireConfirmation = true) {
+  if (requireConfirmation && !window.confirm(confirmation)) return
 
   activeAction.value = actionKey
   errorMessage.value = ''
@@ -380,6 +381,7 @@ async function handleCancelWorkingOrders(symbol?: string) {
     `cancel-${symbol || 'all'}`,
     `Cancel all working broker orders ${label}?`,
     () => cancelWorkingOrders(symbol),
+    requireChartTradeConfirmation.value,
   )
 }
 
@@ -388,6 +390,7 @@ async function handleClosePosition(symbol: string) {
     `close-${symbol}`,
     `Close the broker position for ${symbol}?`,
     () => closePosition(symbol),
+    requireChartTradeConfirmation.value,
   )
 }
 
@@ -396,6 +399,7 @@ async function handleFlatten() {
     'flatten',
     'Flatten all broker positions and cancel all working broker orders?',
     () => flattenPaperAccount(),
+    requireChartTradeConfirmation.value,
   )
 }
 
@@ -513,7 +517,7 @@ async function handleSubmitChartTrade(direction: 'LONG' | 'SHORT') {
     reference_price: Number(entryPrice),
   }
 
-  if (!window.confirm(`Submit ${direction} market order for ${trade.contracts} ${trade.symbol} at reference price ${formatPrice(trade.reference_price)}?`)) {
+  if (requireChartTradeConfirmation.value && !window.confirm(`Submit ${direction} market order for ${trade.contracts} ${trade.symbol} at reference price ${formatPrice(trade.reference_price)}?`)) {
     return
   }
 
@@ -895,12 +899,14 @@ watch(activeTab, (tab) => {
         :is-submitting-trade="isSubmittingTrade"
         :is-loading="isChartLoading"
         :levels="chartLevels"
+        :require-trade-confirmation="requireChartTradeConfirmation"
         :symbol="chartSymbol"
         :timeframe="selectedTimeframe"
         @cancel-orders="handleCancelWorkingOrders(chartSymbol)"
         @chart-trade="handleSubmitChartTrade"
         @close-position="handleClosePosition(chartSymbol)"
         @flatten="handleFlatten"
+        @require-trade-confirmation-change="requireChartTradeConfirmation = $event"
         @symbol-change="selectedChartSymbol = $event"
         @trade-setting-change="updateChartTradeSetting"
         @timeframe-change="selectedTimeframe = $event"

@@ -51,6 +51,7 @@ const props = defineProps<{
   isSubmittingTrade: boolean
   isLoading: boolean
   levels: ChartPriceLevel[]
+  requireTradeConfirmation: boolean
   symbol: string
   timeframe: Timeframe
 }>()
@@ -60,6 +61,7 @@ const emit = defineEmits<{
   chartTrade: [direction: 'LONG' | 'SHORT']
   closePosition: []
   flatten: []
+  requireTradeConfirmationChange: [value: boolean]
   symbolChange: [symbol: string]
   tradeSettingChange: [field: 'contracts', value: number]
   timeframeChange: [timeframe: Timeframe]
@@ -310,6 +312,14 @@ onUnmounted(() => {
             min="1"
             max="100"
             @change="setTradeSetting('contracts', $event)"
+          />
+        </label>
+        <label class="chart-confirm-toggle">
+          <span>Confirm</span>
+          <input
+            :checked="requireTradeConfirmation"
+            type="checkbox"
+            @change="emit('requireTradeConfirmationChange', ($event.target as HTMLInputElement).checked)"
           />
         </label>
       </div>
