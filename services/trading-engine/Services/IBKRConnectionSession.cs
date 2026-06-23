@@ -616,7 +616,10 @@ public sealed class IBKRConnectionSession(
             .Select(position => position.Symbol)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-        foreach (var stale in existing.Where(position => !activeSymbols.Contains(position.Symbol)).ToList())
+        foreach (var stale in existing
+            .Where(position => systemOwnedSymbolSet.Contains(position.Symbol))
+            .Where(position => !activeSymbols.Contains(position.Symbol))
+            .ToList())
         {
             db.Positions.Remove(stale);
             changed = true;
@@ -1066,6 +1069,16 @@ public sealed class IBKRConnectionSession(
 
         private static string NormalizeSymbol(Contract contract)
         {
+            if (contract.SecType.Equals("FUT", StringComparison.OrdinalIgnoreCase)
+                && !string.IsNullOrWhiteSpace(contract.Symbol))
+            {
+                var root = contract.Symbol.Trim().ToUpperInvariant();
+                if (root is "MNQ" or "NQ" or "MES" or "ES")
+                {
+                    return $"{root}1!";
+                }
+            }
+
             if (!string.IsNullOrWhiteSpace(contract.LocalSymbol)) return contract.LocalSymbol.Trim();
             if (!string.IsNullOrWhiteSpace(contract.Symbol)) return contract.Symbol.Trim();
             return "";
