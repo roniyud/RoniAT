@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.SignalR;
+using Microsoft.EntityFrameworkCore;
 using RoniAT.TradingEngine.Data;
 using RoniAT.TradingEngine.Hubs;
 using RoniAT.TradingEngine.Models;
@@ -16,6 +17,7 @@ public sealed class IBKRConnectionSession(
     private static readonly TimeSpan ReconnectInterval = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan HandshakeTimeout = TimeSpan.FromSeconds(6);
     private static readonly TimeSpan AccountsTimeout = TimeSpan.FromSeconds(3);
+    private static readonly TimeSpan PositionsTimeout = TimeSpan.FromSeconds(5);
 
     private readonly SemaphoreSlim connectionLock = new(1, 1);
     private EClientSocket? client;
@@ -77,7 +79,11 @@ public sealed class IBKRConnectionSession(
         {
             try
             {
-                await EnsureConnectedAsync(stoppingToken);
+                var result = await EnsureConnectedAsync(stoppingToken);
+                if (result.Mode.Equals("IBKR", StringComparison.OrdinalIgnoreCase) && result.HandshakeOk)
+                {
+                    await SyncPositionsAsync(stoppingToken);
+                }
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
@@ -164,7 +170,9 @@ public sealed class IBKRConnectionSession(
             messagePump = nextPump;
             connectionKey = key;
 
-            return SaveResult(result);
+            SaveResult(result);
+            await SyncPositionsLockedAsync(cancellationToken);
+            return result;
         }
         catch (OperationCanceledException)
         {
@@ -194,6 +202,46 @@ public sealed class IBKRConnectionSession(
         return client?.IsConnected() == true
             && connectionKey == key
             && stateStore.GetLastResult()?.HandshakeOk == true;
+    }
+
+    public async Task SyncPositionsAsync(CancellationToken cancellationToken = default)
+    {
+        await connectionLock.WaitAsync(cancellationToken);
+
+        try
+        {
+            if (client?.IsConnected() != true || wrapper is null)
+            {
+                return;
+            }
+
+            await SyncPositionsLockedAsync(cancellationToken);
+        }
+        finally
+        {
+            connectionLock.Release();
+        }
+    }
+
+    private async Task SyncPositionsLockedAsync(CancellationToken cancellationToken)
+    {
+        if (client?.IsConnected() != true || wrapper is null)
+        {
+            return;
+        }
+
+        wrapper.ResetPositions();
+        client.reqPositions();
+        var positions = await wrapper.WaitForPositionsAsync(PositionsTimeout, cancellationToken);
+        client.cancelPositions();
+
+        if (positions is null)
+        {
+            logger.LogWarning("IBKR positions sync timed out before positionEnd");
+            return;
+        }
+
+        await PersistPositionsAsync(positions, cancellationToken);
     }
 
     private async Task DisconnectCurrentSessionAsync()
@@ -347,12 +395,95 @@ public sealed class IBKRConnectionSession(
         return null;
     }
 
+    private async Task PersistPositionsAsync(IReadOnlyList<IBKRPositionSnapshot> ibkrPositions, CancellationToken cancellationToken)
+    {
+        using var scope = scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<TradingDbContext>();
+        var existing = await db.Positions.ToListAsync(cancellationToken);
+        var now = DateTimeOffset.UtcNow;
+        var changed = false;
+
+        var activeSymbols = ibkrPositions
+            .Select(position => position.Symbol)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var stale in existing.Where(position => !activeSymbols.Contains(position.Symbol)).ToList())
+        {
+            db.Positions.Remove(stale);
+            changed = true;
+        }
+
+        foreach (var ibkrPosition in ibkrPositions)
+        {
+            var quantity = (int)Math.Abs(decimal.ToInt32(decimal.Round(ibkrPosition.Quantity, 0, MidpointRounding.AwayFromZero)));
+            if (quantity == 0)
+            {
+                continue;
+            }
+
+            var direction = ibkrPosition.Quantity > 0 ? "LONG" : "SHORT";
+            var existingPosition = existing.SingleOrDefault(position =>
+                position.Symbol.Equals(ibkrPosition.Symbol, StringComparison.OrdinalIgnoreCase));
+
+            if (existingPosition is null)
+            {
+                db.Positions.Add(new PositionRecord
+                {
+                    Symbol = ibkrPosition.Symbol,
+                    Direction = direction,
+                    Quantity = quantity,
+                    AveragePrice = ibkrPosition.AveragePrice,
+                    StopLoss = null,
+                    TakeProfit1 = null,
+                    TakeProfit2 = null,
+                    OpenedAt = now,
+                    UpdatedAt = now
+                });
+                changed = true;
+                continue;
+            }
+
+            if (existingPosition.Direction != direction
+                || existingPosition.Quantity != quantity
+                || existingPosition.AveragePrice != ibkrPosition.AveragePrice)
+            {
+                existingPosition.Direction = direction;
+                existingPosition.Quantity = quantity;
+                existingPosition.AveragePrice = ibkrPosition.AveragePrice;
+                existingPosition.StopLoss = null;
+                existingPosition.TakeProfit1 = null;
+                existingPosition.TakeProfit2 = null;
+                existingPosition.UpdatedAt = now;
+                changed = true;
+            }
+        }
+
+        if (!changed)
+        {
+            return;
+        }
+
+        db.AuditLogs.Add(AuditLogRecord.BrokerAction(
+            "ibkr.positions_synced",
+            $"IBKR positions synced: {ibkrPositions.Count} open positions"));
+        await db.SaveChangesAsync(cancellationToken);
+        await hub.Clients.All.SendAsync("trading.updated", new
+        {
+            event_type = "positions.updated",
+            symbol = (string?)null,
+            occurred_at = DateTimeOffset.UtcNow
+        }, cancellationToken);
+    }
+
     private sealed class SessionWrapper : DefaultEWrapper
     {
         private readonly TaskCompletionSource<int> handshakeSource = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly TaskCompletionSource<IReadOnlyList<string>> accountsSource = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly object diagnosticsLock = new();
+        private readonly object positionsLock = new();
         private readonly List<string> diagnostics = [];
+        private List<IBKRPositionSnapshot> positions = [];
+        private TaskCompletionSource<IReadOnlyList<IBKRPositionSnapshot>> positionsSource = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public override void nextValidId(int orderId)
         {
@@ -370,6 +501,33 @@ public sealed class IBKRConnectionSession(
                 .ToArray();
 
             accountsSource.TrySetResult(accounts);
+        }
+
+        public override void position(string account, Contract contract, decimal pos, double avgCost)
+        {
+            if (pos == 0)
+            {
+                return;
+            }
+
+            var symbol = NormalizeSymbol(contract);
+            if (string.IsNullOrWhiteSpace(symbol))
+            {
+                return;
+            }
+
+            lock (positionsLock)
+            {
+                positions.Add(new IBKRPositionSnapshot(symbol, pos, Convert.ToDecimal(avgCost)));
+            }
+        }
+
+        public override void positionEnd()
+        {
+            lock (positionsLock)
+            {
+                positionsSource.TrySetResult(positions.ToArray());
+            }
         }
 
         public override void connectionClosed()
@@ -401,6 +559,7 @@ public sealed class IBKRConnectionSession(
             AddDiagnostic($"reader error: {error.Message}");
             handshakeSource.TrySetException(error);
             accountsSource.TrySetException(error);
+            positionsSource.TrySetException(error);
         }
 
         public Task WaitForHandshakeAsync(CancellationToken cancellationToken)
@@ -431,12 +590,43 @@ public sealed class IBKRConnectionSession(
             }
         }
 
+        public void ResetPositions()
+        {
+            lock (positionsLock)
+            {
+                positions = [];
+                positionsSource = new TaskCompletionSource<IReadOnlyList<IBKRPositionSnapshot>>(TaskCreationOptions.RunContinuationsAsynchronously);
+            }
+        }
+
+        public async Task<IReadOnlyList<IBKRPositionSnapshot>?> WaitForPositionsAsync(TimeSpan timeout, CancellationToken cancellationToken)
+        {
+            using var positionsTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            positionsTimeout.CancelAfter(timeout);
+
+            try
+            {
+                return await positionsSource.Task.WaitAsync(positionsTimeout.Token);
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                return null;
+            }
+        }
+
         private void AddDiagnostic(string message)
         {
             lock (diagnosticsLock)
             {
                 diagnostics.Add(message);
             }
+        }
+
+        private static string NormalizeSymbol(Contract contract)
+        {
+            if (!string.IsNullOrWhiteSpace(contract.LocalSymbol)) return contract.LocalSymbol.Trim();
+            if (!string.IsNullOrWhiteSpace(contract.Symbol)) return contract.Symbol.Trim();
+            return "";
         }
     }
 
@@ -457,4 +647,6 @@ public sealed class IBKRConnectionSession(
                 settings.Account);
         }
     }
+
+    private sealed record IBKRPositionSnapshot(string Symbol, decimal Quantity, decimal AveragePrice);
 }
