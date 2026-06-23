@@ -197,11 +197,19 @@ const activeChartTrade = computed(() => {
   }
 })
 const chartWorkingOrderCount = computed(() => workingOrders.value.filter((order) => normalizeSymbol(order.symbol) === chartSymbol.value).length)
+const isChartSymbolAllowed = computed(() => {
+  const allowedSymbols = riskSettings.value?.allowed_symbols
+    .map((symbol) => normalizeSymbol(symbol))
+    .filter(Boolean) ?? []
+
+  return allowedSymbols.length === 0 || allowedSymbols.includes(chartSymbol.value)
+})
 const chartTradeBlockedReason = computed(() => {
   if (riskSettings.value?.emergency_stop_active) return 'Emergency stop is active'
   if (riskSettings.value?.trading_locked) return 'Trading is locked'
   if (!riskSettings.value?.enable_auto_trading) return 'Auto trading is off'
   if (brokerStatus.value?.read_only) return 'RoniAT order lock is on'
+  if (!isChartSymbolAllowed.value) return `${chartSymbol.value} is not in allowed symbols`
   if (latestChartPrice.value == null) return 'Waiting for chart price'
   return ''
 })
@@ -843,6 +851,7 @@ watch(activeTab, (tab) => {
         :can-submit-trade="canSubmitChartTrade"
         :candles="chartCandles"
         :chart-trade-blocked-reason="chartTradeBlockedReason"
+        :chart-trade-message="tradeMessage"
         :chart-trade-settings="manualTrade"
         :chart-working-order-count="chartWorkingOrderCount"
         :error-message="chartError"

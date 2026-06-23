@@ -47,6 +47,7 @@ const props = defineProps<{
   canSubmitTrade: boolean
   candles: CandlestickData[]
   chartTradeBlockedReason: string
+  chartTradeMessage: string
   chartTradeSettings: ChartTradeSettings
   chartWorkingOrderCount: number
   errorMessage: string
@@ -295,7 +296,7 @@ onUnmounted(() => {
           <span>Chart Trade</span>
           <strong>{{ formattedSymbol }}</strong>
         </div>
-        <small>{{ chartTradeBlockedReason || 'Ready' }}</small>
+        <small>{{ chartTradeBlockedReason || chartTradeMessage || 'Ready' }}</small>
       </div>
 
       <div class="chart-trade-inputs">
