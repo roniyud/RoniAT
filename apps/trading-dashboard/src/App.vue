@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import {
   Activity,
   AlertTriangle,
@@ -22,7 +22,8 @@ import {
   getPositions,
   getSignals,
 } from './services/api'
-import { getMockCandles, type Timeframe } from './services/market-data'
+import { getCandles, type Timeframe } from './services/market-data'
+import type { CandlestickData } from 'lightweight-charts'
 import { createTradingRealtimeClient, type RealtimeStatus, type TradingUpdate } from './services/realtime'
 import type { ApiState, OrderRecord, PositionRecord, TradingSignal } from './services/types'
 
@@ -36,6 +37,9 @@ const errorMessage = ref('')
 const isRefreshing = ref(false)
 const activeAction = ref('')
 const selectedTimeframe = ref<Timeframe>('5m')
+const chartCandles = ref<CandlestickData[]>([])
+const chartError = ref('')
+const isChartLoading = ref(false)
 const realtimeStatus = ref<RealtimeStatus>('disconnected')
 const lastRealtimeEvent = ref<TradingUpdate | null>(null)
 let refreshTimer: number | undefined
@@ -47,7 +51,6 @@ const workingOrderCount = computed(() => workingOrders.value.length)
 const filledOrderCount = computed(() => orders.value.filter((order) => order.status === 'filled').length)
 const cancelledOrderCount = computed(() => orders.value.filter((order) => order.status === 'cancelled').length)
 const chartSymbol = computed(() => signals.value[0]?.symbol || positions.value[0]?.symbol || 'MNQ1!')
-const chartCandles = computed(() => getMockCandles(chartSymbol.value, selectedTimeframe.value))
 
 async function refreshData() {
   isRefreshing.value = true
@@ -71,6 +74,19 @@ async function refreshData() {
     errorMessage.value = error instanceof Error ? error.message : 'Trading Engine is unavailable'
   } finally {
     isRefreshing.value = false
+  }
+}
+
+async function refreshCandles() {
+  isChartLoading.value = true
+  chartError.value = ''
+
+  try {
+    chartCandles.value = await getCandles(chartSymbol.value, selectedTimeframe.value)
+  } catch (error) {
+    chartError.value = error instanceof Error ? error.message : 'Market data unavailable'
+  } finally {
+    isChartLoading.value = false
   }
 }
 
@@ -145,6 +161,7 @@ function getWorkingOrdersForSymbol(symbol: string) {
 
 onMounted(() => {
   refreshData()
+  refreshCandles()
   refreshTimer = window.setInterval(refreshData, 5000)
   realtimeClient = createTradingRealtimeClient(
     (update) => {
@@ -164,6 +181,10 @@ onMounted(() => {
 onUnmounted(() => {
   if (refreshTimer) window.clearInterval(refreshTimer)
   realtimeClient?.stop()
+})
+
+watch([chartSymbol, selectedTimeframe], () => {
+  refreshCandles()
 })
 </script>
 
@@ -255,6 +276,8 @@ onUnmounted(() => {
       <CandlestickChart
         v-if="activeTab === 'chart'"
         :candles="chartCandles"
+        :error-message="chartError"
+        :is-loading="isChartLoading"
         :symbol="chartSymbol"
         :timeframe="selectedTimeframe"
         @timeframe-change="selectedTimeframe = $event"

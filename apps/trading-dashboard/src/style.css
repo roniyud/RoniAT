@@ -295,6 +295,25 @@ h2 {
   height: 430px;
 }
 
+.chart-body {
+  position: relative;
+}
+
+.chart-overlay {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: #667085;
+  background: rgba(255, 255, 255, 0.72);
+  font-size: 14px;
+  pointer-events: none;
+}
+
+.chart-overlay.error {
+  color: #9f1d1d;
+}
+
 .chart-footer {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));

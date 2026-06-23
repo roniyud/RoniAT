@@ -46,6 +46,7 @@ builder.Services.AddDbContext<TradingDbContext>(options =>
     options.UseSqlite(connectionString);
 });
 builder.Services.AddScoped<PaperBrokerAdapter>();
+builder.Services.AddSingleton<IMarketDataProvider, MockMarketDataProvider>();
 
 var app = builder.Build();
 
@@ -151,6 +152,21 @@ app.MapGet("/api/positions", async (TradingDbContext db) =>
     return Results.Ok(positions);
 })
 .WithName("GetPositions")
+.WithOpenApi();
+
+app.MapGet("/api/market-data/candles", (string? symbol, string? timeframe, IMarketDataProvider marketDataProvider) =>
+{
+    try
+    {
+        var candles = marketDataProvider.GetCandles(symbol ?? "MNQ1!", timeframe ?? "5m");
+        return Results.Ok(candles);
+    }
+    catch (ArgumentException error)
+    {
+        return Results.BadRequest(new ValidationErrorResponse([error.Message]));
+    }
+})
+.WithName("GetCandles")
 .WithOpenApi();
 
 app.MapPost("/api/paper/orders/cancel-working", async (SymbolActionRequest request, TradingDbContext db, PaperBrokerAdapter paperBroker, IHubContext<TradingHub> hub) =>

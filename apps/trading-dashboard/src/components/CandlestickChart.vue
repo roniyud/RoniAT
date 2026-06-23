@@ -12,6 +12,8 @@ import { BarChart3 } from '@lucide/vue'
 
 const props = defineProps<{
   candles: CandlestickData[]
+  errorMessage: string
+  isLoading: boolean
   symbol: string
   timeframe: Timeframe
 }>()
@@ -104,7 +106,7 @@ onUnmounted(() => {
         <BarChart3 :size="20" />
         <div>
           <h2>{{ symbol }}</h2>
-          <span>{{ candles.length }} candles</span>
+          <span>{{ candles.length }} candles from Trading Engine</span>
         </div>
       </div>
 
@@ -121,7 +123,12 @@ onUnmounted(() => {
       </div>
     </header>
 
-    <div ref="chartContainer" class="chart-surface" />
+    <div class="chart-body">
+      <div ref="chartContainer" class="chart-surface" />
+      <div v-if="isLoading" class="chart-overlay">Loading candles</div>
+      <div v-else-if="errorMessage" class="chart-overlay error">{{ errorMessage }}</div>
+      <div v-else-if="candles.length === 0" class="chart-overlay">No candles</div>
+    </div>
 
     <footer class="chart-footer">
       <div>

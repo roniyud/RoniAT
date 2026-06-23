@@ -48,7 +48,13 @@ Dashboard URL:
 http://localhost:5173
 ```
 
-The dashboard Chart tab currently uses generated candle data for UI development. Real market data will be wired in when the broker or market-data adapter is added.
+The dashboard Chart tab reads candles from the trading engine:
+
+```text
+GET /api/market-data/candles?symbol=MNQ1!&timeframe=5m
+```
+
+The current trading engine provider is still mock market data, but it is now isolated behind `IMarketDataProvider` so it can be replaced by IBKR, Rithmic, or another market-data source without changing the dashboard.
 
 Paper trading is enabled in the trading engine. Each accepted entry signal creates a filled paper entry order, working paper stop-loss/take-profit orders, a paper execution, and an open paper position in SQLite.
 
