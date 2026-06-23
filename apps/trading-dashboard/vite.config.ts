@@ -27,6 +27,10 @@ export default defineConfig({
     proxy: {
       '/api': 'http://localhost:5066',
       '/health': 'http://localhost:5066',
+      '/hubs': {
+        target: 'http://localhost:5066',
+        ws: true,
+      },
     },
   },
 })

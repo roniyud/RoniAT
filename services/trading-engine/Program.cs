@@ -1,6 +1,8 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.AspNetCore.SignalR;
 using RoniAT.TradingEngine.Contracts;
 using RoniAT.TradingEngine.Data;
+using RoniAT.TradingEngine.Hubs;
 using RoniAT.TradingEngine.Models;
 using RoniAT.TradingEngine.Services;
 using RoniAT.TradingEngine.Validation;
@@ -20,9 +22,11 @@ builder.Services.AddCors(options =>
                 "http://localhost:4173",
                 "http://127.0.0.1:4173")
             .AllowAnyHeader()
-            .AllowAnyMethod();
+            .AllowAnyMethod()
+            .AllowCredentials();
     });
 });
+builder.Services.AddSignalR();
 builder.Services.ConfigureHttpJsonOptions(options =>
 {
     options.SerializerOptions.PropertyNamingPolicy = null;
@@ -64,7 +68,9 @@ app.MapGet("/health", () => Results.Ok(new { status = "ok", service = "trading-e
     .WithName("Health")
     .WithOpenApi();
 
-app.MapPost("/api/signals", async (TradingSignalRequest request, TradingDbContext db, PaperBrokerAdapter paperBroker) =>
+app.MapHub<TradingHub>("/hubs/trading");
+
+app.MapPost("/api/signals", async (TradingSignalRequest request, TradingDbContext db, PaperBrokerAdapter paperBroker, IHubContext<TradingHub> hub) =>
 {
     var validation = TradingSignalValidator.Validate(request);
     if (!validation.Ok)
@@ -81,6 +87,8 @@ app.MapPost("/api/signals", async (TradingSignalRequest request, TradingDbContex
 
     await paperBroker.ApplyEntrySignalAsync(signal, db);
     await db.SaveChangesAsync();
+
+    await BroadcastTradingUpdateAsync(hub, "signal.created", signal.Symbol);
 
     return Results.Created($"/api/signals/{signal.Id}", TradingSignalResponse.FromRecord(signal));
 })
@@ -145,17 +153,19 @@ app.MapGet("/api/positions", async (TradingDbContext db) =>
 .WithName("GetPositions")
 .WithOpenApi();
 
-app.MapPost("/api/paper/orders/cancel-working", async (SymbolActionRequest request, TradingDbContext db, PaperBrokerAdapter paperBroker) =>
+app.MapPost("/api/paper/orders/cancel-working", async (SymbolActionRequest request, TradingDbContext db, PaperBrokerAdapter paperBroker, IHubContext<TradingHub> hub) =>
 {
     var result = await paperBroker.CancelWorkingOrdersAsync(request.Symbol, db);
     await db.SaveChangesAsync();
+
+    await BroadcastTradingUpdateAsync(hub, "orders.updated", request.Symbol);
 
     return Results.Ok(result);
 })
 .WithName("CancelWorkingPaperOrders")
 .WithOpenApi();
 
-app.MapPost("/api/paper/positions/close", async (SymbolActionRequest request, TradingDbContext db, PaperBrokerAdapter paperBroker) =>
+app.MapPost("/api/paper/positions/close", async (SymbolActionRequest request, TradingDbContext db, PaperBrokerAdapter paperBroker, IHubContext<TradingHub> hub) =>
 {
     if (string.IsNullOrWhiteSpace(request.Symbol))
     {
@@ -165,15 +175,19 @@ app.MapPost("/api/paper/positions/close", async (SymbolActionRequest request, Tr
     var result = await paperBroker.ClosePositionAsync(request.Symbol, db);
     await db.SaveChangesAsync();
 
+    await BroadcastTradingUpdateAsync(hub, "positions.updated", request.Symbol);
+
     return Results.Ok(result);
 })
 .WithName("ClosePaperPosition")
 .WithOpenApi();
 
-app.MapPost("/api/paper/flatten", async (TradingDbContext db, PaperBrokerAdapter paperBroker) =>
+app.MapPost("/api/paper/flatten", async (TradingDbContext db, PaperBrokerAdapter paperBroker, IHubContext<TradingHub> hub) =>
 {
     var result = await paperBroker.FlattenAsync(db);
     await db.SaveChangesAsync();
+
+    await BroadcastTradingUpdateAsync(hub, "account.flattened", null);
 
     return Results.Ok(result);
 })
@@ -193,4 +207,14 @@ static string? GetSqlitePath(string connectionString, string contentRootPath)
     return Path.IsPathRooted(path)
         ? path
         : Path.GetFullPath(path, contentRootPath);
+}
+
+static Task BroadcastTradingUpdateAsync(IHubContext<TradingHub> hub, string eventType, string? symbol)
+{
+    return hub.Clients.All.SendAsync("trading.updated", new
+    {
+        event_type = eventType,
+        symbol,
+        occurred_at = DateTimeOffset.UtcNow
+    });
 }

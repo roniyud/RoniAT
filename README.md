@@ -59,3 +59,11 @@ POST /api/paper/orders/cancel-working
 POST /api/paper/positions/close
 POST /api/paper/flatten
 ```
+
+Realtime updates are available through SignalR:
+
+```text
+/hubs/trading
+```
+
+The dashboard listens for `trading.updated` and refreshes immediately, with polling kept as a fallback.

@@ -23,6 +23,7 @@ import {
   getSignals,
 } from './services/api'
 import { getMockCandles, type Timeframe } from './services/market-data'
+import { createTradingRealtimeClient, type RealtimeStatus, type TradingUpdate } from './services/realtime'
 import type { ApiState, OrderRecord, PositionRecord, TradingSignal } from './services/types'
 
 const apiState = ref<ApiState>('loading')
@@ -35,7 +36,10 @@ const errorMessage = ref('')
 const isRefreshing = ref(false)
 const activeAction = ref('')
 const selectedTimeframe = ref<Timeframe>('5m')
+const realtimeStatus = ref<RealtimeStatus>('disconnected')
+const lastRealtimeEvent = ref<TradingUpdate | null>(null)
 let refreshTimer: number | undefined
+let realtimeClient: ReturnType<typeof createTradingRealtimeClient> | undefined
 
 const totalOpenQuantity = computed(() => positions.value.reduce((total, position) => total + Math.abs(position.quantity), 0))
 const workingOrders = computed(() => orders.value.filter((order) => order.status === 'working'))
@@ -142,10 +146,24 @@ function getWorkingOrdersForSymbol(symbol: string) {
 onMounted(() => {
   refreshData()
   refreshTimer = window.setInterval(refreshData, 5000)
+  realtimeClient = createTradingRealtimeClient(
+    (update) => {
+      lastRealtimeEvent.value = update
+      refreshData()
+    },
+    (status) => {
+      realtimeStatus.value = status
+    },
+  )
+  realtimeClient.start().catch((error) => {
+    realtimeStatus.value = 'disconnected'
+    console.warn('SignalR connection failed', error)
+  })
 })
 
 onUnmounted(() => {
   if (refreshTimer) window.clearInterval(refreshTimer)
+  realtimeClient?.stop()
 })
 </script>
 
@@ -163,6 +181,12 @@ onUnmounted(() => {
             <WifiOff v-else-if="apiState === 'offline'" :size="16" />
             <Server v-else :size="16" />
             <span>{{ apiState === 'online' ? 'Trading Engine Online' : apiState === 'offline' ? 'Trading Engine Offline' : 'Connecting' }}</span>
+          </div>
+          <div class="status-line realtime" :class="realtimeStatus">
+            <CheckCircle2 v-if="realtimeStatus === 'connected'" :size="16" />
+            <WifiOff v-else-if="realtimeStatus === 'disconnected'" :size="16" />
+            <Server v-else :size="16" />
+            <span>{{ realtimeStatus === 'connected' ? 'Realtime Connected' : realtimeStatus === 'connecting' ? 'Realtime Connecting' : 'Realtime Offline' }}</span>
           </div>
         </div>
       </div>
@@ -202,7 +226,7 @@ onUnmounted(() => {
       <article class="metric-tile">
         <Clock3 :size="20" />
         <div>
-          <span>Updated</span>
+          <span>{{ lastRealtimeEvent ? lastRealtimeEvent.event_type : 'Updated' }}</span>
           <strong>{{ lastUpdated ? formatTime(lastUpdated.toISOString()) : '-' }}</strong>
         </div>
       </article>
@@ -243,7 +267,7 @@ onUnmounted(() => {
         </div>
 
         <div v-if="signals.length === 0" class="empty-state">No signals</div>
-        <div v-if="orders.length !== 0" class="table-wrap">
+        <div v-if="signals.length !== 0" class="table-wrap">
           <table>
             <thead>
               <tr>

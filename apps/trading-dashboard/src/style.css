@@ -96,6 +96,22 @@ h2 {
   color: #b42318;
 }
 
+.status-line.realtime {
+  margin-top: 3px;
+}
+
+.status-line.connected {
+  color: #13795b;
+}
+
+.status-line.connecting {
+  color: #8a6d1f;
+}
+
+.status-line.disconnected {
+  color: #b42318;
+}
+
 .icon-button {
   display: grid;
   width: 44px;
