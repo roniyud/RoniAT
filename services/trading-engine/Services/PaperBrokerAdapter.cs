@@ -106,6 +106,52 @@ public sealed class PaperBrokerAdapter : IBrokerAdapter
         db.AuditLogs.Add(AuditLogRecord.PaperPositionOpened(signal));
     }
 
+    public async Task<MarketOrderResult> PlaceMarketOrderAsync(string symbol, string direction, int contracts, decimal? referencePrice, TradingDbContext db)
+    {
+        var normalizedSymbol = NormalizeSymbol(symbol);
+        if (normalizedSymbol is null)
+        {
+            throw new ArgumentException("symbol is required", nameof(symbol));
+        }
+
+        var normalizedDirection = direction.Trim().ToUpperInvariant();
+        var now = DateTimeOffset.UtcNow;
+        var fillPrice = referencePrice is > 0 ? referencePrice.Value : 0m;
+        var brokerOrderId = $"PAPER-MKT-{normalizedSymbol}-{now.ToUnixTimeMilliseconds()}";
+
+        var order = new OrderRecord
+        {
+            BrokerOrderId = brokerOrderId,
+            Symbol = normalizedSymbol,
+            Direction = normalizedDirection,
+            OrderType = "paper_market",
+            Quantity = contracts,
+            Price = fillPrice > 0 ? fillPrice : null,
+            Status = "filled",
+            CreatedAt = now,
+            UpdatedAt = now
+        };
+
+        db.Orders.Add(order);
+        db.Executions.Add(new ExecutionRecord
+        {
+            BrokerExecutionId = $"{brokerOrderId}-EXEC",
+            Symbol = normalizedSymbol,
+            Direction = normalizedDirection,
+            Quantity = contracts,
+            Price = fillPrice,
+            ExecutedAt = now
+        });
+
+        var position = await UpsertMarketPositionAsync(normalizedSymbol, normalizedDirection, contracts, fillPrice, db, now);
+
+        db.AuditLogs.Add(AuditLogRecord.PaperAction(
+            "paper.market_order_filled",
+            $"Paper market order {normalizedSymbol} {normalizedDirection} {contracts} filled"));
+
+        return new MarketOrderResult(true, "filled", "Paper market order filled", order, position);
+    }
+
     public async Task<BrokerActionResult> CancelWorkingOrdersAsync(string? symbol, TradingDbContext db)
     {
         var normalizedSymbol = NormalizeSymbol(symbol);
@@ -248,6 +294,47 @@ public sealed class PaperBrokerAdapter : IBrokerAdapter
         existing.TakeProfit1 = signal.TakeProfit1;
         existing.TakeProfit2 = signal.TakeProfit2;
         existing.UpdatedAt = now;
+    }
+
+    private static async Task<PositionRecord> UpsertMarketPositionAsync(string symbol, string direction, int contracts, decimal fillPrice, TradingDbContext db, DateTimeOffset now)
+    {
+        var existing = await db.Positions.SingleOrDefaultAsync(position => position.Symbol == symbol);
+        if (existing is null)
+        {
+            var created = new PositionRecord
+            {
+                Symbol = symbol,
+                Direction = direction,
+                Quantity = contracts,
+                AveragePrice = fillPrice,
+                OpenedAt = now,
+                UpdatedAt = now
+            };
+            db.Positions.Add(created);
+            return created;
+        }
+
+        if (existing.Direction == direction)
+        {
+            var totalQuantity = existing.Quantity + contracts;
+            existing.AveragePrice = totalQuantity > 0
+                ? ((existing.AveragePrice * existing.Quantity) + (fillPrice * contracts)) / totalQuantity
+                : fillPrice;
+            existing.Quantity = totalQuantity;
+        }
+        else
+        {
+            existing.Direction = direction;
+            existing.Quantity = contracts;
+            existing.AveragePrice = fillPrice;
+            existing.OpenedAt = now;
+        }
+
+        existing.StopLoss = null;
+        existing.TakeProfit1 = null;
+        existing.TakeProfit2 = null;
+        existing.UpdatedAt = now;
+        return existing;
     }
 
     private static TargetAllocation SplitTargets(int contracts)

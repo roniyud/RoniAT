@@ -11,6 +11,8 @@ public interface IBrokerAdapter
 
     Task ApplyEntrySignalAsync(TradingSignalRecord signal, TradingDbContext db);
 
+    Task<MarketOrderResult> PlaceMarketOrderAsync(string symbol, string direction, int contracts, decimal? referencePrice, TradingDbContext db);
+
     Task<BrokerActionResult> CancelWorkingOrdersAsync(string? symbol, TradingDbContext db);
 
     Task<BrokerActionResult> ClosePositionAsync(string symbol, TradingDbContext db);
@@ -19,6 +21,14 @@ public interface IBrokerAdapter
 }
 
 public sealed record BrokerActionResult(int CancelledOrders, int ClosedPositions);
+
+public sealed record MarketOrderResult(
+    bool Ok,
+    string Status,
+    string Message,
+    OrderRecord? Order,
+    PositionRecord? Position
+);
 
 public sealed record BrokerStatus(
     string Mode,

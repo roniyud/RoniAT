@@ -124,6 +124,11 @@ app.MapPost("/api/manual-trades", async (TradingSignalRequest request, TradingDb
 .WithName("CreateManualTrade")
 .WithOpenApi();
 
+app.MapPost("/api/market-orders", async (MarketOrderRequest request, TradingDbContext db, IBrokerAdapter brokerAdapter, RiskSettingsStore riskSettingsStore, IHubContext<TradingHub> hub) =>
+    await ProcessMarketOrderAsync(request, db, brokerAdapter, riskSettingsStore, hub))
+.WithName("CreateMarketOrder")
+.WithOpenApi();
+
 app.MapGet("/api/signals", async (TradingDbContext db) =>
 {
     var signals = await db.Signals
@@ -515,6 +520,111 @@ static Task BroadcastTradingUpdateAsync(IHubContext<TradingHub> hub, string even
     });
 }
 
+static async Task<IResult> ProcessMarketOrderAsync(MarketOrderRequest request, TradingDbContext db, IBrokerAdapter brokerAdapter, RiskSettingsStore riskSettingsStore, IHubContext<TradingHub> hub)
+{
+    var validation = await ValidateMarketOrderAsync(request, db, riskSettingsStore);
+    if (validation.Errors.Count > 0)
+    {
+        db.AuditLogs.Add(AuditLogRecord.BrokerAction(
+            "market_order.rejected",
+            $"Market order rejected: {string.Join("; ", validation.Errors)}"));
+        await db.SaveChangesAsync();
+
+        return Results.Ok(new MarketOrderResponse(
+            Ok: false,
+            Status: "rejected_by_risk",
+            Message: string.Join("; ", validation.Errors),
+            Order: null,
+            Position: null));
+    }
+
+    var result = await brokerAdapter.PlaceMarketOrderAsync(
+        validation.Symbol!,
+        validation.Direction!,
+        validation.Contracts!.Value,
+        request.ReferencePrice,
+        db);
+
+    await db.SaveChangesAsync();
+    await BroadcastTradingUpdateAsync(hub, result.Ok ? "market_order.created" : "market_order.rejected", validation.Symbol);
+
+    return Results.Ok(new MarketOrderResponse(
+        Ok: result.Ok,
+        Status: result.Status,
+        Message: result.Message,
+        Order: result.Order,
+        Position: result.Position));
+}
+
+static async Task<MarketOrderValidationResult> ValidateMarketOrderAsync(MarketOrderRequest request, TradingDbContext db, RiskSettingsStore riskSettingsStore)
+{
+    var errors = new List<string>();
+    var symbol = request.Symbol?.Trim().ToUpperInvariant();
+    var direction = request.Direction?.Trim().ToUpperInvariant();
+    var contracts = request.Contracts;
+    var settings = riskSettingsStore.Get();
+
+    if (string.IsNullOrWhiteSpace(symbol))
+    {
+        errors.Add("symbol is required");
+    }
+
+    if (direction is not ("LONG" or "SHORT"))
+    {
+        errors.Add("direction must be LONG or SHORT");
+    }
+
+    if (contracts is null or <= 0)
+    {
+        errors.Add("contracts must be a positive integer");
+    }
+
+    if (!settings.EnableAutoTrading)
+    {
+        errors.Add("Auto trading is disabled");
+    }
+
+    if (settings.TradingLocked)
+    {
+        errors.Add("Trading is locked");
+    }
+
+    if (settings.EmergencyStopActive)
+    {
+        errors.Add("Emergency stop is active");
+    }
+
+    if (settings.MaxContractsPerSignal <= 0)
+    {
+        errors.Add("Risk setting MaxContractsPerSignal must be greater than zero");
+    }
+    else if (contracts > settings.MaxContractsPerSignal)
+    {
+        errors.Add($"Contracts {contracts} exceeds max {settings.MaxContractsPerSignal}");
+    }
+
+    var allowedSymbols = settings.AllowedSymbols
+        .Where(item => !string.IsNullOrWhiteSpace(item))
+        .Select(item => item.Trim().ToUpperInvariant())
+        .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+    if (!string.IsNullOrWhiteSpace(symbol) && allowedSymbols.Count > 0 && !allowedSymbols.Contains(symbol))
+    {
+        errors.Add($"Symbol {symbol} is not allowed");
+    }
+
+    if (!settings.AllowPositionStacking && !string.IsNullOrWhiteSpace(symbol))
+    {
+        var hasOpenPosition = await db.Positions.AnyAsync(position => position.Symbol == symbol);
+        if (hasOpenPosition)
+        {
+            errors.Add($"Open position already exists for {symbol}");
+        }
+    }
+
+    return new MarketOrderValidationResult(symbol, direction, contracts, errors);
+}
+
 static async Task<IResult> ProcessSignalAsync(TradingSignalRequest request, bool isManualTrade, TradingDbContext db, IBrokerAdapter brokerAdapter, RiskValidator riskValidator, IHubContext<TradingHub> hub)
 {
     var validation = TradingSignalValidator.Validate(request);
@@ -559,3 +669,10 @@ static async Task<IResult> ProcessSignalAsync(TradingSignalRequest request, bool
 
     return Results.Created($"/api/signals/{signal.Id}", TradingSignalResponse.FromRecord(signal));
 }
+
+sealed record MarketOrderValidationResult(
+    string? Symbol,
+    string? Direction,
+    int? Contracts,
+    List<string> Errors
+);

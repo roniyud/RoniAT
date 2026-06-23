@@ -131,6 +131,99 @@ public sealed class IBKRBrokerAdapter(
         }
     }
 
+    public async Task<MarketOrderResult> PlaceMarketOrderAsync(string symbol, string direction, int contracts, decimal? referencePrice, TradingDbContext db)
+    {
+        var brokerSettings = settingsStore.Get();
+        var settings = settingsStore.GetActiveIBKRSettings();
+        var normalizedSymbol = symbol.Trim().ToUpperInvariant();
+        var normalizedDirection = direction.Trim().ToUpperInvariant();
+
+        if (!brokerSettings.IbkrEnvironment.Equals("Paper", StringComparison.OrdinalIgnoreCase))
+        {
+            return BlockMarketOrder(db, normalizedSymbol, normalizedDirection, contracts, "IBKR live order placement is not enabled");
+        }
+
+        if (settings.ReadOnly)
+        {
+            return BlockMarketOrder(db, normalizedSymbol, normalizedDirection, contracts, "IBKR is configured as read-only");
+        }
+
+        try
+        {
+            var submittedOrder = await connectionSession.PlaceMarketOrderAsync(
+                normalizedSymbol,
+                normalizedDirection,
+                contracts);
+
+            var now = DateTimeOffset.UtcNow;
+            var localStatus = MapOrderStatus(submittedOrder.Status);
+            var order = new OrderRecord
+            {
+                BrokerOrderId = submittedOrder.OrderId.ToString(),
+                Symbol = normalizedSymbol,
+                Direction = normalizedDirection,
+                OrderType = "ibkr_market",
+                Quantity = contracts,
+                Price = submittedOrder.AverageFillPrice > 0 ? submittedOrder.AverageFillPrice : referencePrice,
+                Status = localStatus,
+                CreatedAt = now,
+                UpdatedAt = now
+            };
+
+            db.Orders.Add(order);
+
+            PositionRecord? position = null;
+            if (submittedOrder.FilledQuantity > 0 && submittedOrder.AverageFillPrice > 0)
+            {
+                db.Executions.Add(new ExecutionRecord
+                {
+                    OrderId = submittedOrder.OrderId,
+                    BrokerExecutionId = $"IBKR-{submittedOrder.OrderId}",
+                    Symbol = normalizedSymbol,
+                    Direction = normalizedDirection,
+                    Quantity = decimal.ToInt32(decimal.Round(submittedOrder.FilledQuantity, 0, MidpointRounding.AwayFromZero)),
+                    Price = submittedOrder.AverageFillPrice,
+                    ExecutedAt = now
+                });
+
+                position = await UpsertMarketPositionAsync(normalizedSymbol, normalizedDirection, contracts, submittedOrder.AverageFillPrice, db, now);
+            }
+
+            db.AuditLogs.Add(AuditLogRecord.BrokerAction(
+                "ibkr.market_order_submitted",
+                $"IBKR Paper market order {submittedOrder.OrderId} {normalizedSymbol} {normalizedDirection} {contracts} status={submittedOrder.Status} filled={submittedOrder.FilledQuantity} avg={submittedOrder.AverageFillPrice}"));
+
+            var ok = localStatus != "rejected" && localStatus != "cancelled";
+            var status = submittedOrder.FilledQuantity > 0 ? "filled" : localStatus;
+            return new MarketOrderResult(ok, status, $"IBKR market order {submittedOrder.OrderId} {status}", order, position);
+        }
+        catch (Exception error)
+        {
+            RecordBlockedAction(db, "ibkr.market_order_failed", $$"""
+            {"symbol":"{{normalizedSymbol}}","direction":"{{normalizedDirection}}","contracts":{{contracts}},"reason":"{{EscapeJson(error.Message)}}"}
+            """);
+
+            db.AuditLogs.Add(AuditLogRecord.BrokerAction(
+                "ibkr.market_order_failed",
+                $"IBKR Paper market order failed for {normalizedSymbol}: {error.Message}"));
+
+            return new MarketOrderResult(false, "broker_blocked", error.Message, null, null);
+        }
+    }
+
+    private static MarketOrderResult BlockMarketOrder(TradingDbContext db, string symbol, string direction, int contracts, string reason)
+    {
+        RecordBlockedAction(db, "ibkr.market_order_blocked", $$"""
+        {"symbol":"{{symbol}}","direction":"{{direction}}","contracts":{{contracts}},"reason":"{{EscapeJson(reason)}}"}
+        """);
+
+        db.AuditLogs.Add(AuditLogRecord.BrokerAction(
+            "ibkr.market_order_blocked",
+            $"IBKR blocked market order {symbol} {direction} {contracts}: {reason}"));
+
+        return new MarketOrderResult(false, "broker_blocked", reason, null, null);
+    }
+
     private static void BlockEntry(TradingSignalRecord signal, TradingDbContext db, string reason)
     {
         signal.Status = "broker_blocked";
@@ -239,6 +332,45 @@ public sealed class IBKRBrokerAdapter(
         existing.TakeProfit1 = signal.TakeProfit1;
         existing.TakeProfit2 = signal.TakeProfit2;
         existing.UpdatedAt = now;
+    }
+
+    private static async Task<PositionRecord> UpsertMarketPositionAsync(string symbol, string direction, int contracts, decimal fillPrice, TradingDbContext db, DateTimeOffset now)
+    {
+        var existing = await db.Positions.SingleOrDefaultAsync(position => position.Symbol == symbol);
+        if (existing is null)
+        {
+            var created = new PositionRecord
+            {
+                Symbol = symbol,
+                Direction = direction,
+                Quantity = contracts,
+                AveragePrice = fillPrice,
+                OpenedAt = now,
+                UpdatedAt = now
+            };
+            db.Positions.Add(created);
+            return created;
+        }
+
+        if (existing.Direction == direction)
+        {
+            var totalQuantity = existing.Quantity + contracts;
+            existing.AveragePrice = ((existing.AveragePrice * existing.Quantity) + (fillPrice * contracts)) / totalQuantity;
+            existing.Quantity = totalQuantity;
+        }
+        else
+        {
+            existing.Direction = direction;
+            existing.Quantity = contracts;
+            existing.AveragePrice = fillPrice;
+            existing.OpenedAt = now;
+        }
+
+        existing.StopLoss = null;
+        existing.TakeProfit1 = null;
+        existing.TakeProfit2 = null;
+        existing.UpdatedAt = now;
+        return existing;
     }
 
     private static string EscapeJson(string value)

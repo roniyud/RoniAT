@@ -32,6 +32,7 @@ import {
   getSignals,
   lockTrading,
   resumeTrading,
+  submitMarketOrder,
   submitManualTrade,
   testBrokerConnection,
   updateBrokerSettings,
@@ -40,7 +41,7 @@ import {
 import { getCandles, type Timeframe } from './services/market-data'
 import type { CandlestickData, UTCTimestamp } from 'lightweight-charts'
 import { createTradingRealtimeClient, type MarketTick, type RealtimeStatus, type TradingUpdate } from './services/realtime'
-import type { ApiState, AuditLogRecord, BrokerConnectionTestResult, BrokerMode, BrokerSettings, IBKRSettings, OrderRecord, PositionRecord, RiskSettings, TradingSignal, TradingSignalRequest } from './services/types'
+import type { ApiState, AuditLogRecord, BrokerConnectionTestResult, BrokerMode, BrokerSettings, IBKRSettings, MarketOrderResponse, OrderRecord, PositionRecord, RiskSettings, TradingSignal, TradingSignalRequest } from './services/types'
 
 const apiState = ref<ApiState>('loading')
 const activeTab = ref<'chart' | 'trade' | 'signals' | 'orders' | 'positions' | 'audit' | 'settings'>('chart')
@@ -508,12 +509,11 @@ async function handleSubmitChartTrade(direction: 'LONG' | 'SHORT') {
     type: 'entry' as const,
     direction,
     contracts: Number(manualTrade.value.contracts),
-    ...buildMarketOnlyProtectionLevels(direction, Number(entryPrice)),
-    entry_price: Number(entryPrice),
     symbol: chartSymbol.value,
+    reference_price: Number(entryPrice),
   }
 
-  if (!window.confirm(`Submit ${direction} market trade for ${trade.contracts} ${trade.symbol} at reference price ${formatPrice(trade.entry_price)}?`)) {
+  if (!window.confirm(`Submit ${direction} market order for ${trade.contracts} ${trade.symbol} at reference price ${formatPrice(trade.reference_price)}?`)) {
     return
   }
 
@@ -522,9 +522,15 @@ async function handleSubmitChartTrade(direction: 'LONG' | 'SHORT') {
   errorMessage.value = ''
 
   try {
-    const result = await submitManualTrade(trade)
-    manualTrade.value = { ...trade }
-    tradeMessage.value = formatTradeSubmissionMessage(result, 'chart')
+    const result = await submitMarketOrder(trade)
+    manualTrade.value = {
+      ...manualTrade.value,
+      direction,
+      contracts: trade.contracts,
+      entry_price: trade.reference_price,
+      symbol: trade.symbol,
+    }
+    tradeMessage.value = formatMarketOrderSubmissionMessage(result)
     await refreshData()
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : 'Chart trade failed'
@@ -545,22 +551,20 @@ function formatTradeSubmissionMessage(result: TradingSignal, source: string) {
   return `Signal ${result.id} from ${source}: ${status}`
 }
 
-function buildMarketOnlyProtectionLevels(direction: 'LONG' | 'SHORT', entryPrice: number) {
-  const offset = Math.max(Math.round(entryPrice * 0.0025 / 0.25) * 0.25, 20)
-
-  if (direction === 'LONG') {
-    return {
-      stop_loss: entryPrice - offset,
-      take_profit_1: entryPrice + offset,
-      take_profit_2: entryPrice + offset * 2,
-    }
+function formatMarketOrderSubmissionMessage(result: MarketOrderResponse) {
+  if (result.ok) {
+    return result.message || `Market order ${result.status}`
   }
 
-  return {
-    stop_loss: entryPrice + offset,
-    take_profit_1: entryPrice - offset,
-    take_profit_2: entryPrice - offset * 2,
+  if (result.status === 'rejected_by_risk') {
+    return `Market order rejected: ${result.message}`
   }
+
+  if (result.status === 'broker_blocked') {
+    return `Broker blocked market order: ${result.message}`
+  }
+
+  return `Market order failed: ${result.message || result.status}`
 }
 
 function updateChartTradeSetting(field: 'contracts', value: number) {

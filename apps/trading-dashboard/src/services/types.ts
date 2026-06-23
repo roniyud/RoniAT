@@ -25,6 +25,21 @@ export type TradingSignalRequest = {
   symbol: string
 }
 
+export type MarketOrderRequest = {
+  symbol: string
+  direction: 'LONG' | 'SHORT'
+  contracts: number
+  reference_price?: number | null
+}
+
+export type MarketOrderResponse = {
+  ok: boolean
+  status: string
+  message: string
+  order?: OrderRecord | null
+  position?: PositionRecord | null
+}
+
 export type OrderRecord = {
   id: number
   signalId?: number | null

@@ -1,4 +1,4 @@
-import type { AuditLogRecord, BrokerConnectionTestResult, BrokerMode, BrokerSettings, OrderRecord, PaperActionResult, PositionRecord, RiskSettings, TradingSignal, TradingSignalRequest } from './types'
+import type { AuditLogRecord, BrokerConnectionTestResult, BrokerMode, BrokerSettings, MarketOrderRequest, MarketOrderResponse, OrderRecord, PaperActionResult, PositionRecord, RiskSettings, TradingSignal, TradingSignalRequest } from './types'
 
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/+$/, '')
 
@@ -102,6 +102,30 @@ export async function submitManualTrade(trade: TradingSignalRequest) {
   }
 
   return response.json() as Promise<TradingSignal>
+}
+
+export async function submitMarketOrder(order: MarketOrderRequest) {
+  const response = await fetch(`${API_BASE_URL}/api/market-orders`, {
+    method: 'POST',
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(order),
+  })
+
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status} from Trading Engine`)
+  }
+
+  const payload = await response.json() as Record<string, unknown>
+  return {
+    ok: Boolean(payload.ok ?? payload.Ok),
+    status: readString(payload, 'status', 'Status'),
+    message: readString(payload, 'message', 'Message'),
+    order: payload.order || payload.Order ? mapOrder((payload.order ?? payload.Order) as Record<string, unknown>) : null,
+    position: payload.position || payload.Position ? mapPosition((payload.position ?? payload.Position) as Record<string, unknown>) : null,
+  } satisfies MarketOrderResponse
 }
 
 export async function lockTrading() {

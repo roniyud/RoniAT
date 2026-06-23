@@ -20,6 +20,11 @@ public sealed class BrokerRouterAdapter(
         return ActiveAdapter.ApplyEntrySignalAsync(signal, db);
     }
 
+    public Task<MarketOrderResult> PlaceMarketOrderAsync(string symbol, string direction, int contracts, decimal? referencePrice, TradingDbContext db)
+    {
+        return ActiveAdapter.PlaceMarketOrderAsync(symbol, direction, contracts, referencePrice, db);
+    }
+
     public Task<BrokerActionResult> CancelWorkingOrdersAsync(string? symbol, TradingDbContext db)
     {
         return ActiveAdapter.CancelWorkingOrdersAsync(symbol, db);
