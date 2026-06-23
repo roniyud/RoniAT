@@ -10,7 +10,7 @@ import {
   type ISeriesApi,
 } from 'lightweight-charts'
 import { timeframes, type Timeframe } from '../services/market-data'
-import { BarChart3 } from '@lucide/vue'
+import { Activity, BarChart3, BriefcaseBusiness, Send, XCircle } from '@lucide/vue'
 
 type ChartPriceLevel = {
   id: string
@@ -34,11 +34,23 @@ type ActiveTrade = {
   updatedAt?: string | null
 }
 
+type ChartTradeSettings = {
+  contracts: number
+  stop_loss: number
+  take_profit_1: number
+  take_profit_2: number
+}
+
 const props = defineProps<{
   activeTrade: ActiveTrade | null
   availableSymbols: string[]
+  canSubmitTrade: boolean
   candles: CandlestickData[]
+  chartTradeBlockedReason: string
+  chartTradeSettings: ChartTradeSettings
+  chartWorkingOrderCount: number
   errorMessage: string
+  isSubmittingTrade: boolean
   isLoading: boolean
   levels: ChartPriceLevel[]
   symbol: string
@@ -46,7 +58,12 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
+  cancelOrders: []
+  chartTrade: [direction: 'LONG' | 'SHORT']
+  closePosition: []
+  flatten: []
   symbolChange: [symbol: string]
+  tradeSettingChange: [field: 'contracts' | 'stop_loss' | 'take_profit_1' | 'take_profit_2', value: number]
   timeframeChange: [timeframe: Timeframe]
 }>()
 
@@ -84,6 +101,11 @@ function setTimeframe(timeframe: Timeframe) {
 function setSymbol(event: Event) {
   const target = event.target as HTMLInputElement
   emit('symbolChange', target.value.trim().toUpperCase())
+}
+
+function setTradeSetting(field: 'contracts' | 'stop_loss' | 'take_profit_1' | 'take_profit_2', event: Event) {
+  const target = event.target as HTMLInputElement
+  emit('tradeSettingChange', field, Number(target.value))
 }
 
 function toLineStyle(style: ChartPriceLevel['style']) {
@@ -264,6 +286,103 @@ onUnmounted(() => {
           <span>Working Orders</span>
           <strong>{{ activeTrade.workingOrders }}</strong>
         </div>
+      </div>
+    </section>
+
+    <section class="chart-trade-panel">
+      <div class="chart-trade-header">
+        <div>
+          <span>Chart Trade</span>
+          <strong>{{ formattedSymbol }}</strong>
+        </div>
+        <small>{{ chartTradeBlockedReason || 'Ready' }}</small>
+      </div>
+
+      <div class="chart-trade-inputs">
+        <label>
+          <span>Contracts</span>
+          <input
+            :value="chartTradeSettings.contracts"
+            type="number"
+            min="1"
+            max="100"
+            @change="setTradeSetting('contracts', $event)"
+          />
+        </label>
+        <label>
+          <span>SL</span>
+          <input
+            :value="chartTradeSettings.stop_loss"
+            type="number"
+            step="0.25"
+            @change="setTradeSetting('stop_loss', $event)"
+          />
+        </label>
+        <label>
+          <span>TP1</span>
+          <input
+            :value="chartTradeSettings.take_profit_1"
+            type="number"
+            step="0.25"
+            @change="setTradeSetting('take_profit_1', $event)"
+          />
+        </label>
+        <label>
+          <span>TP2</span>
+          <input
+            :value="chartTradeSettings.take_profit_2"
+            type="number"
+            step="0.25"
+            @change="setTradeSetting('take_profit_2', $event)"
+          />
+        </label>
+      </div>
+
+      <div class="chart-trade-actions">
+        <button
+          class="chart-trade-button buy"
+          type="button"
+          :disabled="!canSubmitTrade"
+          @click="emit('chartTrade', 'LONG')"
+        >
+          <Send :size="16" />
+          <span>{{ isSubmittingTrade ? 'Submitting' : 'Buy MKT' }}</span>
+        </button>
+        <button
+          class="chart-trade-button sell"
+          type="button"
+          :disabled="!canSubmitTrade"
+          @click="emit('chartTrade', 'SHORT')"
+        >
+          <Send :size="16" />
+          <span>{{ isSubmittingTrade ? 'Submitting' : 'Sell MKT' }}</span>
+        </button>
+        <button
+          class="chart-trade-button secondary"
+          type="button"
+          :disabled="!activeTrade"
+          @click="emit('closePosition')"
+        >
+          <BriefcaseBusiness :size="16" />
+          <span>Close</span>
+        </button>
+        <button
+          class="chart-trade-button secondary"
+          type="button"
+          :disabled="chartWorkingOrderCount === 0"
+          @click="emit('cancelOrders')"
+        >
+          <XCircle :size="16" />
+          <span>Cancel</span>
+        </button>
+        <button
+          class="chart-trade-button danger"
+          type="button"
+          @click="emit('flatten')"
+        >
+          <Activity :size="16" />
+          <span>Flatten</span>
+        </button>
       </div>
     </section>
 

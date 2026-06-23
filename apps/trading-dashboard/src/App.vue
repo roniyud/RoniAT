@@ -196,6 +196,15 @@ const activeChartTrade = computed(() => {
     updatedAt: position.updatedAt,
   }
 })
+const chartWorkingOrderCount = computed(() => workingOrders.value.filter((order) => normalizeSymbol(order.symbol) === chartSymbol.value).length)
+const chartTradeBlockedReason = computed(() => {
+  if (riskSettings.value?.emergency_stop_active) return 'Emergency stop is active'
+  if (riskSettings.value?.trading_locked) return 'Trading is locked'
+  if (!riskSettings.value?.enable_auto_trading) return 'Auto trading is off'
+  if (latestChartPrice.value == null) return 'Waiting for chart price'
+  return ''
+})
+const canSubmitChartTrade = computed(() => !chartTradeBlockedReason.value && !isSubmittingTrade.value)
 
 function normalizeSymbol(symbol?: string | null) {
   return symbol?.trim().toUpperCase() ?? ''
@@ -469,6 +478,55 @@ async function handleSubmitManualTrade() {
     errorMessage.value = error instanceof Error ? error.message : 'Manual trade failed'
   } finally {
     isSubmittingTrade.value = false
+  }
+}
+
+async function handleSubmitChartTrade(direction: 'LONG' | 'SHORT') {
+  const entryPrice = latestChartPrice.value
+  if (entryPrice == null) {
+    errorMessage.value = 'Chart price is unavailable'
+    return
+  }
+
+  const trade = {
+    type: 'entry' as const,
+    direction,
+    contracts: Number(manualTrade.value.contracts),
+    stop_loss: Number(manualTrade.value.stop_loss),
+    take_profit_1: Number(manualTrade.value.take_profit_1),
+    take_profit_2: Number(manualTrade.value.take_profit_2),
+    entry_price: Number(entryPrice),
+    symbol: chartSymbol.value,
+  }
+
+  if (!window.confirm(`Submit ${direction} market trade for ${trade.contracts} ${trade.symbol} at reference price ${formatPrice(trade.entry_price)}?`)) {
+    return
+  }
+
+  isSubmittingTrade.value = true
+  tradeMessage.value = ''
+  errorMessage.value = ''
+
+  try {
+    const result = await submitManualTrade(trade)
+    manualTrade.value = { ...trade }
+    tradeMessage.value = result.status === 'rejected_by_risk'
+      ? `Rejected by risk as signal ${result.id}`
+      : `Submitted from chart as signal ${result.id}`
+    await refreshData()
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : 'Chart trade failed'
+  } finally {
+    isSubmittingTrade.value = false
+  }
+}
+
+function updateChartTradeSetting(field: 'contracts' | 'stop_loss' | 'take_profit_1' | 'take_profit_2', value: number) {
+  manualTrade.value = {
+    ...manualTrade.value,
+    symbol: chartSymbol.value,
+    entry_price: latestChartPrice.value ?? manualTrade.value.entry_price,
+    [field]: value,
   }
 }
 
@@ -781,13 +839,23 @@ watch(activeTab, (tab) => {
         v-if="activeTab === 'chart'"
         :available-symbols="availableChartSymbols"
         :active-trade="activeChartTrade"
+        :can-submit-trade="canSubmitChartTrade"
         :candles="chartCandles"
+        :chart-trade-blocked-reason="chartTradeBlockedReason"
+        :chart-trade-settings="manualTrade"
+        :chart-working-order-count="chartWorkingOrderCount"
         :error-message="chartError"
+        :is-submitting-trade="isSubmittingTrade"
         :is-loading="isChartLoading"
         :levels="chartLevels"
         :symbol="chartSymbol"
         :timeframe="selectedTimeframe"
+        @cancel-orders="handleCancelWorkingOrders(chartSymbol)"
+        @chart-trade="handleSubmitChartTrade"
+        @close-position="handleClosePosition(chartSymbol)"
+        @flatten="handleFlatten"
         @symbol-change="selectedChartSymbol = $event"
+        @trade-setting-change="updateChartTradeSetting"
         @timeframe-change="selectedTimeframe = $event"
       />
 
