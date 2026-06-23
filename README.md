@@ -58,13 +58,16 @@ The current trading engine provider is still mock market data, but it is now iso
 
 Paper trading is enabled in the trading engine. Each accepted entry signal creates a filled paper entry order, working paper stop-loss/take-profit orders, a paper execution, and an open paper position in SQLite.
 
-Paper trading control endpoints:
+Broker control endpoints:
 
 ```text
-POST /api/paper/orders/cancel-working
-POST /api/paper/positions/close
-POST /api/paper/flatten
+GET  /api/broker
+POST /api/broker/orders/cancel-working
+POST /api/broker/positions/close
+POST /api/broker/flatten
 ```
+
+The current configured broker mode is `Paper`, backed by `PaperBrokerAdapter`. Legacy `/api/paper/...` aliases are still available during development.
 
 Realtime updates are available through SignalR:
 

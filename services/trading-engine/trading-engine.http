@@ -46,6 +46,36 @@ Accept: application/json
 
 ###
 
+GET {{trading_engine_HostAddress}}/api/broker
+Accept: application/json
+
+###
+
+POST {{trading_engine_HostAddress}}/api/broker/orders/cancel-working
+Content-Type: application/json
+
+{
+  "symbol": "MNQ1!"
+}
+
+###
+
+POST {{trading_engine_HostAddress}}/api/broker/positions/close
+Content-Type: application/json
+
+{
+  "symbol": "MNQ1!"
+}
+
+###
+
+POST {{trading_engine_HostAddress}}/api/broker/flatten
+Content-Type: application/json
+
+{}
+
+###
+
 POST {{trading_engine_HostAddress}}/api/paper/orders/cancel-working
 Content-Type: application/json
 

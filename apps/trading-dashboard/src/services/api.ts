@@ -21,15 +21,15 @@ export async function getPositions() {
 }
 
 export async function cancelWorkingOrders(symbol?: string) {
-  return postPaperAction('/api/paper/orders/cancel-working', { symbol })
+  return postBrokerAction('/api/broker/orders/cancel-working', { symbol })
 }
 
 export async function closePosition(symbol: string) {
-  return postPaperAction('/api/paper/positions/close', { symbol })
+  return postBrokerAction('/api/broker/positions/close', { symbol })
 }
 
 export async function flattenPaperAccount() {
-  return postPaperAction('/api/paper/flatten', {})
+  return postBrokerAction('/api/broker/flatten', {})
 }
 
 async function request<T>(path: string): Promise<T> {
@@ -46,7 +46,7 @@ async function request<T>(path: string): Promise<T> {
   return response.json() as Promise<T>
 }
 
-async function postPaperAction(path: string, body: Record<string, unknown>): Promise<PaperActionResult> {
+async function postBrokerAction(path: string, body: Record<string, unknown>): Promise<PaperActionResult> {
   const response = await fetch(`${API_BASE_URL}${path}`, {
     method: 'POST',
     headers: {

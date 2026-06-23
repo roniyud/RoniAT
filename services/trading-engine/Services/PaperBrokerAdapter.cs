@@ -4,8 +4,10 @@ using RoniAT.TradingEngine.Models;
 
 namespace RoniAT.TradingEngine.Services;
 
-public sealed class PaperBrokerAdapter
+public sealed class PaperBrokerAdapter : IBrokerAdapter
 {
+    public string Name => "Paper";
+
     public async Task ApplyEntrySignalAsync(TradingSignalRecord signal, TradingDbContext db)
     {
         var now = DateTimeOffset.UtcNow;
@@ -92,7 +94,7 @@ public sealed class PaperBrokerAdapter
         db.AuditLogs.Add(AuditLogRecord.PaperPositionOpened(signal));
     }
 
-    public async Task<PaperActionResult> CancelWorkingOrdersAsync(string? symbol, TradingDbContext db)
+    public async Task<BrokerActionResult> CancelWorkingOrdersAsync(string? symbol, TradingDbContext db)
     {
         var normalizedSymbol = NormalizeSymbol(symbol);
         var query = db.Orders.Where(order => order.Status == "working");
@@ -117,10 +119,10 @@ public sealed class PaperBrokerAdapter
                 ? $"Cancelled {orders.Count} working paper orders"
                 : $"Cancelled {orders.Count} working paper orders for {normalizedSymbol}"));
 
-        return new PaperActionResult(orders.Count, 0);
+        return new BrokerActionResult(orders.Count, 0);
     }
 
-    public async Task<PaperActionResult> ClosePositionAsync(string symbol, TradingDbContext db)
+    public async Task<BrokerActionResult> ClosePositionAsync(string symbol, TradingDbContext db)
     {
         var normalizedSymbol = NormalizeSymbol(symbol);
         if (normalizedSymbol is null)
@@ -131,7 +133,7 @@ public sealed class PaperBrokerAdapter
         var position = await db.Positions.SingleOrDefaultAsync(item => item.Symbol == normalizedSymbol);
         if (position is null)
         {
-            return new PaperActionResult(0, 0);
+            return new BrokerActionResult(0, 0);
         }
 
         var now = DateTimeOffset.UtcNow;
@@ -167,10 +169,10 @@ public sealed class PaperBrokerAdapter
             "paper.position_closed",
             $"Closed paper position {normalizedSymbol} {position.Direction} {position.Quantity}"));
 
-        return new PaperActionResult(cancelled.CancelledOrders, 1);
+        return new BrokerActionResult(cancelled.CancelledOrders, 1);
     }
 
-    public async Task<PaperActionResult> FlattenAsync(TradingDbContext db)
+    public async Task<BrokerActionResult> FlattenAsync(TradingDbContext db)
     {
         var symbols = await db.Positions
             .Select(position => position.Symbol)
@@ -193,7 +195,7 @@ public sealed class PaperBrokerAdapter
             "paper.flatten",
             $"Flatten completed: {closedPositions} positions closed, {cancelledOrders} orders cancelled"));
 
-        return new PaperActionResult(cancelledOrders, closedPositions);
+        return new BrokerActionResult(cancelledOrders, closedPositions);
     }
 
     private static async Task UpsertPositionAsync(TradingSignalRecord signal, TradingDbContext db, DateTimeOffset now)
@@ -255,5 +257,3 @@ public sealed class PaperBrokerAdapter
 
     private sealed record TargetAllocation(int TakeProfit1, int TakeProfit2);
 }
-
-public sealed record PaperActionResult(int CancelledOrders, int ClosedPositions);

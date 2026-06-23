@@ -46,6 +46,13 @@ builder.Services.AddDbContext<TradingDbContext>(options =>
     options.UseSqlite(connectionString);
 });
 builder.Services.AddScoped<PaperBrokerAdapter>();
+builder.Services.AddScoped<IBrokerAdapter>(serviceProvider =>
+{
+    var mode = builder.Configuration.GetValue<string>("Broker:Mode") ?? "Paper";
+    return mode.Equals("Paper", StringComparison.OrdinalIgnoreCase)
+        ? serviceProvider.GetRequiredService<PaperBrokerAdapter>()
+        : throw new InvalidOperationException($"Unsupported broker mode: {mode}");
+});
 builder.Services.AddSingleton<IMarketDataProvider, MockMarketDataProvider>();
 
 var app = builder.Build();
@@ -71,7 +78,7 @@ app.MapGet("/health", () => Results.Ok(new { status = "ok", service = "trading-e
 
 app.MapHub<TradingHub>("/hubs/trading");
 
-app.MapPost("/api/signals", async (TradingSignalRequest request, TradingDbContext db, PaperBrokerAdapter paperBroker, IHubContext<TradingHub> hub) =>
+app.MapPost("/api/signals", async (TradingSignalRequest request, TradingDbContext db, IBrokerAdapter brokerAdapter, IHubContext<TradingHub> hub) =>
 {
     var validation = TradingSignalValidator.Validate(request);
     if (!validation.Ok)
@@ -86,7 +93,7 @@ app.MapPost("/api/signals", async (TradingSignalRequest request, TradingDbContex
     db.AuditLogs.Add(AuditLogRecord.SignalAccepted(signal));
     await db.SaveChangesAsync();
 
-    await paperBroker.ApplyEntrySignalAsync(signal, db);
+    await brokerAdapter.ApplyEntrySignalAsync(signal, db);
     await db.SaveChangesAsync();
 
     await BroadcastTradingUpdateAsync(hub, "signal.created", signal.Symbol);
@@ -169,9 +176,54 @@ app.MapGet("/api/market-data/candles", (string? symbol, string? timeframe, IMark
 .WithName("GetCandles")
 .WithOpenApi();
 
-app.MapPost("/api/paper/orders/cancel-working", async (SymbolActionRequest request, TradingDbContext db, PaperBrokerAdapter paperBroker, IHubContext<TradingHub> hub) =>
+app.MapGet("/api/broker", (IBrokerAdapter brokerAdapter) => Results.Ok(new { mode = brokerAdapter.Name }))
+.WithName("GetBrokerMode")
+.WithOpenApi();
+
+app.MapPost("/api/broker/orders/cancel-working", async (SymbolActionRequest request, TradingDbContext db, IBrokerAdapter brokerAdapter, IHubContext<TradingHub> hub) =>
 {
-    var result = await paperBroker.CancelWorkingOrdersAsync(request.Symbol, db);
+    var result = await brokerAdapter.CancelWorkingOrdersAsync(request.Symbol, db);
+    await db.SaveChangesAsync();
+
+    await BroadcastTradingUpdateAsync(hub, "orders.updated", request.Symbol);
+
+    return Results.Ok(result);
+})
+.WithName("CancelWorkingOrders")
+.WithOpenApi();
+
+app.MapPost("/api/broker/positions/close", async (SymbolActionRequest request, TradingDbContext db, IBrokerAdapter brokerAdapter, IHubContext<TradingHub> hub) =>
+{
+    if (string.IsNullOrWhiteSpace(request.Symbol))
+    {
+        return Results.BadRequest(new ValidationErrorResponse(["symbol is required"]));
+    }
+
+    var result = await brokerAdapter.ClosePositionAsync(request.Symbol, db);
+    await db.SaveChangesAsync();
+
+    await BroadcastTradingUpdateAsync(hub, "positions.updated", request.Symbol);
+
+    return Results.Ok(result);
+})
+.WithName("ClosePosition")
+.WithOpenApi();
+
+app.MapPost("/api/broker/flatten", async (TradingDbContext db, IBrokerAdapter brokerAdapter, IHubContext<TradingHub> hub) =>
+{
+    var result = await brokerAdapter.FlattenAsync(db);
+    await db.SaveChangesAsync();
+
+    await BroadcastTradingUpdateAsync(hub, "account.flattened", null);
+
+    return Results.Ok(result);
+})
+.WithName("FlattenAccount")
+.WithOpenApi();
+
+app.MapPost("/api/paper/orders/cancel-working", async (SymbolActionRequest request, TradingDbContext db, IBrokerAdapter brokerAdapter, IHubContext<TradingHub> hub) =>
+{
+    var result = await brokerAdapter.CancelWorkingOrdersAsync(request.Symbol, db);
     await db.SaveChangesAsync();
 
     await BroadcastTradingUpdateAsync(hub, "orders.updated", request.Symbol);
@@ -181,14 +233,14 @@ app.MapPost("/api/paper/orders/cancel-working", async (SymbolActionRequest reque
 .WithName("CancelWorkingPaperOrders")
 .WithOpenApi();
 
-app.MapPost("/api/paper/positions/close", async (SymbolActionRequest request, TradingDbContext db, PaperBrokerAdapter paperBroker, IHubContext<TradingHub> hub) =>
+app.MapPost("/api/paper/positions/close", async (SymbolActionRequest request, TradingDbContext db, IBrokerAdapter brokerAdapter, IHubContext<TradingHub> hub) =>
 {
     if (string.IsNullOrWhiteSpace(request.Symbol))
     {
         return Results.BadRequest(new ValidationErrorResponse(["symbol is required"]));
     }
 
-    var result = await paperBroker.ClosePositionAsync(request.Symbol, db);
+    var result = await brokerAdapter.ClosePositionAsync(request.Symbol, db);
     await db.SaveChangesAsync();
 
     await BroadcastTradingUpdateAsync(hub, "positions.updated", request.Symbol);
@@ -198,9 +250,9 @@ app.MapPost("/api/paper/positions/close", async (SymbolActionRequest request, Tr
 .WithName("ClosePaperPosition")
 .WithOpenApi();
 
-app.MapPost("/api/paper/flatten", async (TradingDbContext db, PaperBrokerAdapter paperBroker, IHubContext<TradingHub> hub) =>
+app.MapPost("/api/paper/flatten", async (TradingDbContext db, IBrokerAdapter brokerAdapter, IHubContext<TradingHub> hub) =>
 {
-    var result = await paperBroker.FlattenAsync(db);
+    var result = await brokerAdapter.FlattenAsync(db);
     await db.SaveChangesAsync();
 
     await BroadcastTradingUpdateAsync(hub, "account.flattened", null);
