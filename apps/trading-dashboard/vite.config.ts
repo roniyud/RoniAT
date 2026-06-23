@@ -17,7 +17,7 @@ export default defineConfig({
         theme_color: '#0f766e',
       },
       devOptions: {
-        enabled: true,
+        enabled: false,
       },
     }),
   ],

@@ -208,6 +208,9 @@ const chartTradeBlockedReason = computed(() => {
   if (riskSettings.value?.emergency_stop_active) return 'Emergency stop is active'
   if (riskSettings.value?.trading_locked) return 'Trading is locked'
   if (!riskSettings.value?.enable_auto_trading) return 'Auto trading is off'
+  if (!brokerStatus.value?.configured) return 'Broker is not configured'
+  if (!brokerStatus.value?.enabled) return 'Broker is disabled'
+  if (!brokerStatus.value?.connected) return 'Broker is disconnected'
   if (brokerStatus.value?.read_only) return 'RoniAT order lock is on'
   if (!isChartSymbolAllowed.value) return `${chartSymbol.value} is not in allowed symbols`
   if (latestChartPrice.value == null) return 'Waiting for chart price'
@@ -479,9 +482,7 @@ async function handleSubmitManualTrade() {
       take_profit_2: Number(manualTrade.value.take_profit_2),
     })
 
-    tradeMessage.value = result.status === 'rejected_by_risk'
-      ? `Rejected by risk as signal ${result.id}`
-      : `Submitted as signal ${result.id}`
+    tradeMessage.value = formatTradeSubmissionMessage(result, 'manual form')
     await refreshData()
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : 'Manual trade failed'
@@ -519,15 +520,25 @@ async function handleSubmitChartTrade(direction: 'LONG' | 'SHORT') {
   try {
     const result = await submitManualTrade(trade)
     manualTrade.value = { ...trade }
-    tradeMessage.value = result.status === 'rejected_by_risk'
-      ? `Rejected by risk as signal ${result.id}`
-      : `Submitted from chart as signal ${result.id}`
+    tradeMessage.value = formatTradeSubmissionMessage(result, 'chart')
     await refreshData()
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : 'Chart trade failed'
   } finally {
     isSubmittingTrade.value = false
   }
+}
+
+function formatTradeSubmissionMessage(result: TradingSignal, source: string) {
+  const status = result.status || 'unknown'
+
+  if (status === 'rejected_by_risk') return `Rejected by risk from ${source} as signal ${result.id}`
+  if (status === 'broker_blocked') return `Broker blocked ${source} signal ${result.id}`
+  if (status.includes('rejected') || status.includes('failed')) return `Rejected from ${source} as signal ${result.id}: ${status}`
+  if (status.includes('opened') || status.includes('filled')) return `Position opened from ${source} as signal ${result.id}`
+  if (status.includes('submitted') || status.includes('working')) return `Submitted to broker from ${source} as signal ${result.id}`
+
+  return `Signal ${result.id} from ${source}: ${status}`
 }
 
 function updateChartTradeSetting(field: 'contracts' | 'stop_loss' | 'take_profit_1' | 'take_profit_2', value: number) {
