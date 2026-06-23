@@ -508,9 +508,7 @@ async function handleSubmitChartTrade(direction: 'LONG' | 'SHORT') {
     type: 'entry' as const,
     direction,
     contracts: Number(manualTrade.value.contracts),
-    stop_loss: Number(manualTrade.value.stop_loss),
-    take_profit_1: Number(manualTrade.value.take_profit_1),
-    take_profit_2: Number(manualTrade.value.take_profit_2),
+    ...buildMarketOnlyProtectionLevels(direction, Number(entryPrice)),
     entry_price: Number(entryPrice),
     symbol: chartSymbol.value,
   }
@@ -547,7 +545,25 @@ function formatTradeSubmissionMessage(result: TradingSignal, source: string) {
   return `Signal ${result.id} from ${source}: ${status}`
 }
 
-function updateChartTradeSetting(field: 'contracts' | 'stop_loss' | 'take_profit_1' | 'take_profit_2', value: number) {
+function buildMarketOnlyProtectionLevels(direction: 'LONG' | 'SHORT', entryPrice: number) {
+  const offset = Math.max(Math.round(entryPrice * 0.0025 / 0.25) * 0.25, 20)
+
+  if (direction === 'LONG') {
+    return {
+      stop_loss: entryPrice - offset,
+      take_profit_1: entryPrice + offset,
+      take_profit_2: entryPrice + offset * 2,
+    }
+  }
+
+  return {
+    stop_loss: entryPrice + offset,
+    take_profit_1: entryPrice - offset,
+    take_profit_2: entryPrice - offset * 2,
+  }
+}
+
+function updateChartTradeSetting(field: 'contracts', value: number) {
   manualTrade.value = {
     ...manualTrade.value,
     symbol: chartSymbol.value,

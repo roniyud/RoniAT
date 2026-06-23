@@ -36,9 +36,6 @@ type ActiveTrade = {
 
 type ChartTradeSettings = {
   contracts: number
-  stop_loss: number
-  take_profit_1: number
-  take_profit_2: number
 }
 
 const props = defineProps<{
@@ -64,7 +61,7 @@ const emit = defineEmits<{
   closePosition: []
   flatten: []
   symbolChange: [symbol: string]
-  tradeSettingChange: [field: 'contracts' | 'stop_loss' | 'take_profit_1' | 'take_profit_2', value: number]
+  tradeSettingChange: [field: 'contracts', value: number]
   timeframeChange: [timeframe: Timeframe]
 }>()
 
@@ -104,7 +101,7 @@ function setSymbol(event: Event) {
   emit('symbolChange', target.value.trim().toUpperCase())
 }
 
-function setTradeSetting(field: 'contracts' | 'stop_loss' | 'take_profit_1' | 'take_profit_2', event: Event) {
+function setTradeSetting(field: 'contracts', event: Event) {
   const target = event.target as HTMLInputElement
   emit('tradeSettingChange', field, Number(target.value))
 }
@@ -313,33 +310,6 @@ onUnmounted(() => {
             min="1"
             max="100"
             @change="setTradeSetting('contracts', $event)"
-          />
-        </label>
-        <label>
-          <span>SL</span>
-          <input
-            :value="chartTradeSettings.stop_loss"
-            type="number"
-            step="0.25"
-            @change="setTradeSetting('stop_loss', $event)"
-          />
-        </label>
-        <label>
-          <span>TP1</span>
-          <input
-            :value="chartTradeSettings.take_profit_1"
-            type="number"
-            step="0.25"
-            @change="setTradeSetting('take_profit_1', $event)"
-          />
-        </label>
-        <label>
-          <span>TP2</span>
-          <input
-            :value="chartTradeSettings.take_profit_2"
-            type="number"
-            step="0.25"
-            @change="setTradeSetting('take_profit_2', $event)"
           />
         </label>
       </div>
