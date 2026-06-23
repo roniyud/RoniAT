@@ -88,7 +88,8 @@ builder.Services.AddScoped<PaperBrokerAdapter>();
 builder.Services.AddScoped<IBKRBrokerAdapter>();
 builder.Services.AddScoped<BrokerRouterAdapter>();
 builder.Services.AddScoped<IBrokerAdapter>(serviceProvider => serviceProvider.GetRequiredService<BrokerRouterAdapter>());
-builder.Services.AddSingleton<IMarketDataProvider, MockMarketDataProvider>();
+builder.Services.AddSingleton<MockMarketDataProvider>();
+builder.Services.AddSingleton<IMarketDataProvider, IBKRMarketDataProvider>();
 
 var app = builder.Build();
 
@@ -194,11 +195,11 @@ app.MapGet("/api/audit-logs", async (TradingDbContext db) =>
 .WithName("GetAuditLogs")
 .WithOpenApi();
 
-app.MapGet("/api/market-data/candles", (string? symbol, string? timeframe, IMarketDataProvider marketDataProvider) =>
+app.MapGet("/api/market-data/candles", async (string? symbol, string? timeframe, IMarketDataProvider marketDataProvider, CancellationToken cancellationToken) =>
 {
     try
     {
-        var candles = marketDataProvider.GetCandles(symbol ?? "MNQ1!", timeframe ?? "5m");
+        var candles = await marketDataProvider.GetCandlesAsync(symbol ?? "MNQ1!", timeframe ?? "5m", cancellationToken);
         return Results.Ok(candles);
     }
     catch (ArgumentException error)

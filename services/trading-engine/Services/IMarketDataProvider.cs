@@ -4,5 +4,5 @@ namespace RoniAT.TradingEngine.Services;
 
 public interface IMarketDataProvider
 {
-    IReadOnlyList<CandleResponse> GetCandles(string symbol, string timeframe);
+    Task<IReadOnlyList<CandleResponse>> GetCandlesAsync(string symbol, string timeframe, CancellationToken cancellationToken = default);
 }

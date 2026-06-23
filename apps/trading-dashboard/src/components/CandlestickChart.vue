@@ -162,7 +162,7 @@ onUnmounted(() => {
         <BarChart3 :size="20" />
         <div>
           <h2>{{ formattedSymbol }}</h2>
-          <span>{{ candles.length }} mock candles from Trading Engine</span>
+          <span>{{ candles.length }} candles from Trading Engine</span>
         </div>
       </div>
 

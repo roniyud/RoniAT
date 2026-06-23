@@ -12,6 +12,11 @@ public sealed class MockMarketDataProvider : IMarketDataProvider
         ["1h"] = 60
     };
 
+    public Task<IReadOnlyList<CandleResponse>> GetCandlesAsync(string symbol, string timeframe, CancellationToken cancellationToken = default)
+    {
+        return Task.FromResult(GetCandles(symbol, timeframe));
+    }
+
     public IReadOnlyList<CandleResponse> GetCandles(string symbol, string timeframe)
     {
         var normalizedSymbol = string.IsNullOrWhiteSpace(symbol) ? "MNQ1!" : symbol.Trim().ToUpperInvariant();

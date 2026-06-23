@@ -1,9 +1,11 @@
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
+using RoniAT.TradingEngine.Contracts;
 using RoniAT.TradingEngine.Data;
 using RoniAT.TradingEngine.Hubs;
 using RoniAT.TradingEngine.Models;
 using IBApi;
+using System.Globalization;
 
 namespace RoniAT.TradingEngine.Services;
 
@@ -18,8 +20,10 @@ public sealed class IBKRConnectionSession(
     private static readonly TimeSpan HandshakeTimeout = TimeSpan.FromSeconds(6);
     private static readonly TimeSpan AccountsTimeout = TimeSpan.FromSeconds(3);
     private static readonly TimeSpan PositionsTimeout = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan HistoricalDataTimeout = TimeSpan.FromSeconds(12);
 
     private readonly SemaphoreSlim connectionLock = new(1, 1);
+    private int nextMarketDataRequestId = 7000;
     private EClientSocket? client;
     private EReaderSignal? signal;
     private CancellationTokenSource? sessionCts;
@@ -221,6 +225,88 @@ public sealed class IBKRConnectionSession(
         {
             connectionLock.Release();
         }
+    }
+
+    public async Task<IReadOnlyList<CandleResponse>> GetHistoricalCandlesAsync(
+        string symbol,
+        string timeframe,
+        CancellationToken cancellationToken = default)
+    {
+        await connectionLock.WaitAsync(cancellationToken);
+
+        try
+        {
+            var result = await EnsureConnectedLockedAsync(cancellationToken);
+            if (!result.HandshakeOk || client?.IsConnected() != true || wrapper is null)
+            {
+                throw new InvalidOperationException(result.Message);
+            }
+
+            var requestId = Interlocked.Increment(ref nextMarketDataRequestId);
+            var request = HistoricalDataRequest.From(symbol, timeframe);
+
+            wrapper.ResetHistoricalData(requestId);
+            client.reqHistoricalData(
+                requestId,
+                request.Contract,
+                endDateTime: "",
+                durationStr: request.Duration,
+                barSizeSetting: request.BarSize,
+                whatToShow: "TRADES",
+                useRTH: 0,
+                formatDate: 2,
+                keepUpToDate: false,
+                chartOptions: []);
+
+            try
+            {
+                var candles = await wrapper.WaitForHistoricalDataAsync(requestId, HistoricalDataTimeout, cancellationToken);
+                return candles ?? [];
+            }
+            finally
+            {
+                client.cancelHistoricalData(requestId);
+            }
+        }
+        finally
+        {
+            connectionLock.Release();
+        }
+    }
+
+    private async Task<BrokerConnectionTestResult> EnsureConnectedLockedAsync(CancellationToken cancellationToken)
+    {
+        var brokerSettings = settingsStore.Get();
+        var settings = settingsStore.GetActiveIBKRSettings();
+        var key = IBKRConnectionKey.From(brokerSettings, settings);
+
+        if (!brokerSettings.Mode.Equals("IBKR", StringComparison.OrdinalIgnoreCase))
+        {
+            await DisconnectCurrentSessionAsync();
+            return SaveResult(CreatePaperResult(DateTimeOffset.UtcNow));
+        }
+
+        if (string.IsNullOrWhiteSpace(settings.Host) || settings.Port <= 0)
+        {
+            await DisconnectCurrentSessionAsync();
+            return SaveResult(CreateFailure(settings, brokerSettings.IbkrEnvironment, "IBKR host or port is not configured", DateTimeOffset.UtcNow));
+        }
+
+        if (!settings.Enabled)
+        {
+            await DisconnectCurrentSessionAsync();
+            return SaveResult(CreateFailure(settings, brokerSettings.IbkrEnvironment, $"IBKR {brokerSettings.IbkrEnvironment} is disabled", DateTimeOffset.UtcNow));
+        }
+
+        if (IsConnectedFor(key))
+        {
+            return stateStore.GetLastResult() ?? BuildSuccessResult(settings, brokerSettings.IbkrEnvironment, [], client!.ServerVersion, DateTimeOffset.UtcNow);
+        }
+
+        var previous = stateStore.GetLastResult();
+        var result = await ConnectLockedAsync(settings, brokerSettings.IbkrEnvironment, key, cancellationToken);
+        await WriteTransitionAuditAsync(previous, result, cancellationToken);
+        return result;
     }
 
     private async Task SyncPositionsLockedAsync(CancellationToken cancellationToken)
@@ -492,9 +578,13 @@ public sealed class IBKRConnectionSession(
         private readonly TaskCompletionSource<IReadOnlyList<string>> accountsSource = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly object diagnosticsLock = new();
         private readonly object positionsLock = new();
+        private readonly object historicalDataLock = new();
         private readonly List<string> diagnostics = [];
         private List<IBKRPositionSnapshot> positions = [];
         private TaskCompletionSource<IReadOnlyList<IBKRPositionSnapshot>> positionsSource = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int historicalDataRequestId;
+        private List<CandleResponse> historicalCandles = [];
+        private TaskCompletionSource<IReadOnlyList<CandleResponse>> historicalDataSource = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public override void nextValidId(int orderId)
         {
@@ -541,11 +631,52 @@ public sealed class IBKRConnectionSession(
             }
         }
 
+        public override void historicalData(int reqId, Bar bar)
+        {
+            lock (historicalDataLock)
+            {
+                if (reqId != historicalDataRequestId)
+                {
+                    return;
+                }
+
+                if (!TryParseUnixTime(bar.Time, out var time))
+                {
+                    AddDiagnostic($"historicalData {reqId} skipped unsupported bar time {bar.Time}");
+                    return;
+                }
+
+                historicalCandles.Add(new CandleResponse(
+                    time,
+                    Convert.ToDecimal(bar.Open),
+                    Convert.ToDecimal(bar.High),
+                    Convert.ToDecimal(bar.Low),
+                    Convert.ToDecimal(bar.Close)));
+            }
+        }
+
+        public override void historicalDataEnd(int reqId, string start, string end)
+        {
+            lock (historicalDataLock)
+            {
+                if (reqId != historicalDataRequestId)
+                {
+                    return;
+                }
+
+                historicalDataSource.TrySetResult(historicalCandles
+                    .OrderBy(candle => candle.Time)
+                    .TakeLast(300)
+                    .ToArray());
+            }
+        }
+
         public override void connectionClosed()
         {
             AddDiagnostic("connectionClosed received");
             handshakeSource.TrySetException(new InvalidOperationException("IBKR API connection closed before handshake completed"));
             accountsSource.TrySetException(new InvalidOperationException("IBKR API connection closed before managed accounts were received"));
+            historicalDataSource.TrySetException(new InvalidOperationException("IBKR API connection closed before historical data was received"));
         }
 
         public override void error(Exception e)
@@ -553,6 +684,7 @@ public sealed class IBKRConnectionSession(
             AddDiagnostic($"error exception: {e.Message}");
             handshakeSource.TrySetException(e);
             accountsSource.TrySetException(e);
+            historicalDataSource.TrySetException(e);
         }
 
         public override void error(string str)
@@ -563,6 +695,11 @@ public sealed class IBKRConnectionSession(
         public override void error(int id, int errorCode, string errorMsg, string advancedOrderRejectJson)
         {
             AddDiagnostic($"error {errorCode}: {errorMsg}");
+
+            if (id == historicalDataRequestId && IsHistoricalDataError(errorCode))
+            {
+                historicalDataSource.TrySetException(new InvalidOperationException($"IBKR historical data error {errorCode}: {errorMsg}"));
+            }
         }
 
         public void CaptureReaderError(Exception error)
@@ -571,6 +708,7 @@ public sealed class IBKRConnectionSession(
             handshakeSource.TrySetException(error);
             accountsSource.TrySetException(error);
             positionsSource.TrySetException(error);
+            historicalDataSource.TrySetException(error);
         }
 
         public Task WaitForHandshakeAsync(CancellationToken cancellationToken)
@@ -610,6 +748,42 @@ public sealed class IBKRConnectionSession(
             }
         }
 
+        public void ResetHistoricalData(int requestId)
+        {
+            lock (historicalDataLock)
+            {
+                historicalDataRequestId = requestId;
+                historicalCandles = [];
+                historicalDataSource = new TaskCompletionSource<IReadOnlyList<CandleResponse>>(TaskCreationOptions.RunContinuationsAsynchronously);
+            }
+        }
+
+        public async Task<IReadOnlyList<CandleResponse>?> WaitForHistoricalDataAsync(int requestId, TimeSpan timeout, CancellationToken cancellationToken)
+        {
+            Task<IReadOnlyList<CandleResponse>> task;
+            lock (historicalDataLock)
+            {
+                if (requestId != historicalDataRequestId)
+                {
+                    return [];
+                }
+
+                task = historicalDataSource.Task;
+            }
+
+            using var historicalTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            historicalTimeout.CancelAfter(timeout);
+
+            try
+            {
+                return await task.WaitAsync(historicalTimeout.Token);
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                return null;
+            }
+        }
+
         public async Task<IReadOnlyList<IBKRPositionSnapshot>?> WaitForPositionsAsync(TimeSpan timeout, CancellationToken cancellationToken)
         {
             using var positionsTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -638,6 +812,69 @@ public sealed class IBKRConnectionSession(
             if (!string.IsNullOrWhiteSpace(contract.LocalSymbol)) return contract.LocalSymbol.Trim();
             if (!string.IsNullOrWhiteSpace(contract.Symbol)) return contract.Symbol.Trim();
             return "";
+        }
+
+        private static bool TryParseUnixTime(string value, out long unixTime)
+        {
+            if (long.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out unixTime))
+            {
+                return true;
+            }
+
+            unixTime = 0;
+            return false;
+        }
+
+        private static bool IsHistoricalDataError(int errorCode)
+        {
+            return errorCode is 162 or 165 or 200 or 321 or 354 or 366 or 420;
+        }
+    }
+
+    private sealed record HistoricalDataRequest(Contract Contract, string Duration, string BarSize)
+    {
+        public static HistoricalDataRequest From(string symbol, string timeframe)
+        {
+            var normalizedSymbol = NormalizeTradingViewSymbol(symbol);
+            var normalizedTimeframe = string.IsNullOrWhiteSpace(timeframe) ? "5m" : timeframe.Trim().ToLowerInvariant();
+            var (duration, barSize) = normalizedTimeframe switch
+            {
+                "1m" => ("2 D", "1 min"),
+                "5m" => ("5 D", "5 mins"),
+                "15m" => ("10 D", "15 mins"),
+                "1h" => ("30 D", "1 hour"),
+                _ => throw new ArgumentException("Unsupported timeframe. Use 1m, 5m, 15m, or 1h.", nameof(timeframe))
+            };
+
+            return new HistoricalDataRequest(BuildContract(normalizedSymbol), duration, barSize);
+        }
+
+        private static string NormalizeTradingViewSymbol(string symbol)
+        {
+            return (string.IsNullOrWhiteSpace(symbol) ? "MNQ1!" : symbol.Trim().ToUpperInvariant())
+                .Replace("1!", "", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static Contract BuildContract(string symbol)
+        {
+            if (symbol is "MNQ" or "NQ" or "MES" or "ES")
+            {
+                return new Contract
+                {
+                    Symbol = symbol,
+                    SecType = "CONTFUT",
+                    Exchange = "CME",
+                    Currency = "USD"
+                };
+            }
+
+            return new Contract
+            {
+                Symbol = symbol,
+                SecType = "STK",
+                Exchange = "SMART",
+                Currency = "USD"
+            };
         }
     }
 
