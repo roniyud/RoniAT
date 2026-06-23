@@ -88,6 +88,7 @@ builder.Services.AddScoped<IBKRBrokerAdapter>();
 builder.Services.AddScoped<BrokerRouterAdapter>();
 builder.Services.AddScoped<IBrokerAdapter>(serviceProvider => serviceProvider.GetRequiredService<BrokerRouterAdapter>());
 builder.Services.AddSingleton<IMarketDataProvider, MockMarketDataProvider>();
+builder.Services.AddHostedService<IBKRConnectionMonitor>();
 
 var app = builder.Build();
 
