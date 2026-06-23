@@ -81,14 +81,14 @@ builder.Services.Configure<BrokerSettings>(options =>
 });
 builder.Services.AddSingleton<BrokerSettingsStore>();
 builder.Services.AddSingleton<BrokerConnectionStateStore>();
-builder.Services.AddScoped<IBKRReadOnlyHandshakeClient>();
+builder.Services.AddSingleton<IBKRConnectionSession>();
+builder.Services.AddHostedService(serviceProvider => serviceProvider.GetRequiredService<IBKRConnectionSession>());
 builder.Services.AddScoped<IBKRConnectionTester>();
 builder.Services.AddScoped<PaperBrokerAdapter>();
 builder.Services.AddScoped<IBKRBrokerAdapter>();
 builder.Services.AddScoped<BrokerRouterAdapter>();
 builder.Services.AddScoped<IBrokerAdapter>(serviceProvider => serviceProvider.GetRequiredService<BrokerRouterAdapter>());
 builder.Services.AddSingleton<IMarketDataProvider, MockMarketDataProvider>();
-builder.Services.AddHostedService<IBKRConnectionMonitor>();
 
 var app = builder.Build();
 

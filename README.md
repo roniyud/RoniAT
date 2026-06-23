@@ -105,9 +105,9 @@ POST /api/broker/test-connection
 
 `IBKR` is currently a read-only adapter: it can verify an IB Gateway/TWS API session and managed account, writes audit/broker events, and blocks live order actions with `broker_blocked` status. It does not place live orders yet.
 
-The connection test opens an IBKR API socket through the local official CSharpAPI project under `D:\RONI\IB\TWS API\source\CSharpClient\client`, waits for the API handshake (`nextValidId`), requests managed accounts, and verifies the configured Paper/Live account when provided. It does not subscribe to data, request positions, or place orders.
+The IBKR session opens a persistent IBKR API socket through the local official CSharpAPI project under `D:\RONI\IB\TWS API\source\CSharpClient\client`, waits for the API handshake (`nextValidId`), requests managed accounts, and verifies the configured Paper/Live account when provided. It does not subscribe to data, request positions, or place orders yet.
 
-When runtime broker mode is `IBKR` and the active IBKR environment is enabled, the trading engine runs a read-only connection monitor every 10 seconds. The monitor retries the IBKR API handshake, updates broker status, broadcasts dashboard refresh events, and writes audit events only when the connection transitions between connected and disconnected states.
+When runtime broker mode is `IBKR` and the active IBKR environment is enabled, the trading engine keeps the IBKR session open. If the session is not connected, or the active settings change, it retries connection every 10 seconds, updates broker status, broadcasts dashboard refresh events, and writes audit events only when the connection transitions between connected and disconnected states.
 
 IBKR skeleton settings:
 
