@@ -64,7 +64,7 @@ builder.Services.Configure<BrokerSettings>(options =>
     {
         Host = ibkrSection.GetValue<string>("Paper:Host") ?? ibkrSection.GetValue<string>("Host") ?? "127.0.0.1",
         Port = ibkrSection.GetValue<int?>("Paper:Port") ?? ibkrSection.GetValue<int?>("Port") ?? 4002,
-        ClientId = ibkrSection.GetValue<int?>("Paper:ClientId") ?? ibkrSection.GetValue<int?>("ClientId") ?? 10,
+        ClientId = ibkrSection.GetValue<int?>("Paper:ClientId") ?? ibkrSection.GetValue<int?>("ClientId") ?? 5324,
         Account = ibkrSection.GetValue<string>("Paper:Account") ?? ibkrSection.GetValue<string>("Account") ?? "",
         Enabled = ibkrSection.GetValue<bool?>("Paper:Enabled") ?? ibkrSection.GetValue<bool?>("Enabled") ?? false,
         ReadOnly = ibkrSection.GetValue<bool?>("Paper:ReadOnly") ?? ibkrSection.GetValue<bool?>("ReadOnly") ?? true

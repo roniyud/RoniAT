@@ -105,7 +105,7 @@ POST /api/broker/test-connection
 
 `IBKR` is currently a read-only adapter: it can verify an IB Gateway/TWS API session and managed account, writes audit/broker events, and blocks live order actions with `broker_blocked` status. It does not place live orders yet.
 
-The connection test opens an IBKR API socket, waits for the API handshake (`nextValidId`), requests managed accounts, and verifies the configured Paper/Live account when provided. It does not subscribe to data, request positions, or place orders.
+The connection test opens an IBKR API socket through the local official CSharpAPI project under `D:\RONI\IB\TWS API\source\CSharpClient\client`, waits for the API handshake (`nextValidId`), requests managed accounts, and verifies the configured Paper/Live account when provided. It does not subscribe to data, request positions, or place orders.
 
 IBKR skeleton settings:
 
@@ -114,7 +114,7 @@ IBKR skeleton settings:
   "Paper": {
     "Host": "127.0.0.1",
     "Port": 4002,
-    "ClientId": 10,
+    "ClientId": 5324,
     "Account": "",
     "Enabled": false,
     "ReadOnly": true

@@ -19,6 +19,8 @@ public sealed class IBKRReadOnlyHandshakeClient
         var wrapper = new ReadOnlyWrapper();
         var signal = new EReaderMonitorSignal();
         var client = new EClientSocket(wrapper, signal);
+        client.AsyncEConnect = true;
+        wrapper.SetStartApi(client.startApi);
         Task? messagePump = null;
 
         try
@@ -26,17 +28,12 @@ public sealed class IBKRReadOnlyHandshakeClient
             await Task.Run(() => client.eConnect(settings.Host, settings.Port, settings.ClientId), CancellationToken.None)
                 .WaitAsync(timeout.Token);
 
-            if (!client.IsConnected())
-            {
-                return Failure(settings, environment, "IBKR API socket did not connect", testedAt);
-            }
-
             var reader = new EReader(client, signal);
             reader.Start();
 
             messagePump = Task.Run(() =>
             {
-                while (client.IsConnected() && !timeout.IsCancellationRequested)
+                while (!timeout.IsCancellationRequested)
                 {
                     signal.waitForSignal();
                     reader.processMsgs();
@@ -70,7 +67,12 @@ public sealed class IBKRReadOnlyHandshakeClient
         }
         catch (OperationCanceledException)
         {
-            return Failure(settings, environment, "IBKR API handshake timed out after 6 seconds", testedAt);
+            var details = wrapper.GetDiagnosticDetails();
+            var message = string.IsNullOrWhiteSpace(details)
+                ? "IBKR API handshake timed out after 6 seconds"
+                : $"IBKR API handshake timed out after 6 seconds. {details}";
+
+            return Failure(settings, environment, message, testedAt);
         }
         catch (Exception error)
         {
@@ -78,10 +80,7 @@ public sealed class IBKRReadOnlyHandshakeClient
         }
         finally
         {
-            if (client.IsConnected())
-            {
-                client.eDisconnect(false);
-            }
+            client.eDisconnect();
 
             timeout.Cancel();
             signal.issueSignal();
@@ -143,14 +142,30 @@ public sealed class IBKRReadOnlyHandshakeClient
     {
         private readonly TaskCompletionSource<int> handshakeSource = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly TaskCompletionSource<IReadOnlyList<string>> accountsSource = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly object diagnosticsLock = new();
+        private readonly List<string> diagnostics = [];
+        private Action? startApi;
+
+        public void SetStartApi(Action startApiAction)
+        {
+            startApi = startApiAction;
+        }
+
+        public override void connectAck()
+        {
+            AddDiagnostic("connectAck received");
+            startApi?.Invoke();
+        }
 
         public override void nextValidId(int orderId)
         {
+            AddDiagnostic($"nextValidId {orderId} received");
             handshakeSource.TrySetResult(orderId);
         }
 
         public override void managedAccounts(string accountsList)
         {
+            AddDiagnostic($"managedAccounts received: {accountsList}");
             var accounts = accountsList
                 .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                 .Where(account => !string.IsNullOrWhiteSpace(account))
@@ -162,14 +177,26 @@ public sealed class IBKRReadOnlyHandshakeClient
 
         public override void connectionClosed()
         {
+            AddDiagnostic("connectionClosed received");
             handshakeSource.TrySetException(new InvalidOperationException("IBKR API connection closed before handshake completed"));
             accountsSource.TrySetException(new InvalidOperationException("IBKR API connection closed before managed accounts were received"));
         }
 
         public override void error(Exception e)
         {
+            AddDiagnostic($"error exception: {e.Message}");
             handshakeSource.TrySetException(e);
             accountsSource.TrySetException(e);
+        }
+
+        public override void error(string str)
+        {
+            AddDiagnostic($"error: {str}");
+        }
+
+        public override void error(int id, int errorCode, string errorMsg, string advancedOrderRejectJson)
+        {
+            AddDiagnostic($"error {errorCode}: {errorMsg}");
         }
 
         public Task WaitForHandshakeAsync(CancellationToken cancellationToken)
@@ -189,6 +216,22 @@ public sealed class IBKRReadOnlyHandshakeClient
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
             {
                 return [];
+            }
+        }
+
+        public string GetDiagnosticDetails()
+        {
+            lock (diagnosticsLock)
+            {
+                return diagnostics.Count == 0 ? "" : string.Join("; ", diagnostics);
+            }
+        }
+
+        private void AddDiagnostic(string message)
+        {
+            lock (diagnosticsLock)
+            {
+                diagnostics.Add(message);
             }
         }
     }
