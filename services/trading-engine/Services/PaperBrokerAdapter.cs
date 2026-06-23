@@ -296,7 +296,7 @@ public sealed class PaperBrokerAdapter : IBrokerAdapter
         existing.UpdatedAt = now;
     }
 
-    private static async Task<PositionRecord> UpsertMarketPositionAsync(string symbol, string direction, int contracts, decimal fillPrice, TradingDbContext db, DateTimeOffset now)
+    private static async Task<PositionRecord?> UpsertMarketPositionAsync(string symbol, string direction, int contracts, decimal fillPrice, TradingDbContext db, DateTimeOffset now)
     {
         var existing = await db.Positions.SingleOrDefaultAsync(position => position.Symbol == symbol);
         if (existing is null)
@@ -322,10 +322,19 @@ public sealed class PaperBrokerAdapter : IBrokerAdapter
                 : fillPrice;
             existing.Quantity = totalQuantity;
         }
+        else if (contracts < existing.Quantity)
+        {
+            existing.Quantity -= contracts;
+        }
+        else if (contracts == existing.Quantity)
+        {
+            db.Positions.Remove(existing);
+            return null;
+        }
         else
         {
+            existing.Quantity = contracts - existing.Quantity;
             existing.Direction = direction;
-            existing.Quantity = contracts;
             existing.AveragePrice = fillPrice;
             existing.OpenedAt = now;
         }
