@@ -534,6 +534,10 @@ h3 {
   opacity: 0.45;
 }
 
+.chart-trade-button.blocked:not(:disabled) {
+  box-shadow: inset 0 0 0 2px rgba(245, 158, 11, 0.45);
+}
+
 .chart-trade-button.buy {
   color: #ffffff;
   background: #13795b;

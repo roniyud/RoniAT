@@ -492,6 +492,12 @@ async function handleSubmitManualTrade() {
 }
 
 async function handleSubmitChartTrade(direction: 'LONG' | 'SHORT') {
+  if (chartTradeBlockedReason.value) {
+    tradeMessage.value = chartTradeBlockedReason.value
+    errorMessage.value = chartTradeBlockedReason.value
+    return
+  }
+
   const entryPrice = latestChartPrice.value
   if (entryPrice == null) {
     errorMessage.value = 'Chart price is unavailable'

@@ -109,6 +109,11 @@ function setTradeSetting(field: 'contracts' | 'stop_loss' | 'take_profit_1' | 't
   emit('tradeSettingChange', field, Number(target.value))
 }
 
+function submitChartTrade(direction: 'LONG' | 'SHORT') {
+  if (props.isSubmittingTrade) return
+  emit('chartTrade', direction)
+}
+
 function toLineStyle(style: ChartPriceLevel['style']) {
   if (style === 'dotted') return LineStyle.Dotted
   if (style === 'dashed') return LineStyle.Dashed
@@ -343,8 +348,10 @@ onUnmounted(() => {
         <button
           class="chart-trade-button buy"
           type="button"
-          :disabled="!canSubmitTrade"
-          @click="emit('chartTrade', 'LONG')"
+          :class="{ blocked: !canSubmitTrade }"
+          :disabled="isSubmittingTrade"
+          :title="chartTradeBlockedReason || 'Submit buy market order'"
+          @click="submitChartTrade('LONG')"
         >
           <Send :size="16" />
           <span>{{ isSubmittingTrade ? 'Submitting' : 'Buy MKT' }}</span>
@@ -352,8 +359,10 @@ onUnmounted(() => {
         <button
           class="chart-trade-button sell"
           type="button"
-          :disabled="!canSubmitTrade"
-          @click="emit('chartTrade', 'SHORT')"
+          :class="{ blocked: !canSubmitTrade }"
+          :disabled="isSubmittingTrade"
+          :title="chartTradeBlockedReason || 'Submit sell market order'"
+          @click="submitChartTrade('SHORT')"
         >
           <Send :size="16" />
           <span>{{ isSubmittingTrade ? 'Submitting' : 'Sell MKT' }}</span>
