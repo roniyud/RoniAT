@@ -24,12 +24,14 @@ public sealed class IBKRConnectionSession(
 
     private readonly SemaphoreSlim connectionLock = new(1, 1);
     private int nextMarketDataRequestId = 7000;
+    private int nextStreamingRequestId = 9000;
     private EClientSocket? client;
     private EReaderSignal? signal;
     private CancellationTokenSource? sessionCts;
     private Task? messagePump;
     private SessionWrapper? wrapper;
     private IBKRConnectionKey? connectionKey;
+    private readonly Dictionary<string, int> marketDataSubscriptions = new(StringComparer.OrdinalIgnoreCase);
 
     public async Task<BrokerConnectionTestResult> EnsureConnectedAsync(CancellationToken cancellationToken = default)
     {
@@ -131,7 +133,7 @@ public sealed class IBKRConnectionSession(
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(HandshakeTimeout);
 
-        var nextWrapper = new SessionWrapper();
+        var nextWrapper = new SessionWrapper(PublishMarketTick);
         var nextSignal = new EReaderMonitorSignal();
         var nextClient = new EClientSocket(nextWrapper, nextSignal);
         var nextSessionCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -246,6 +248,7 @@ public sealed class IBKRConnectionSession(
             var request = HistoricalDataRequest.From(symbol, timeframe);
 
             wrapper.ResetHistoricalData(requestId);
+            EnsureMarketDataSubscriptionLocked(request.Symbol, request.Contract);
             client.reqHistoricalData(
                 requestId,
                 request.Contract,
@@ -272,6 +275,36 @@ public sealed class IBKRConnectionSession(
         {
             connectionLock.Release();
         }
+    }
+
+    private void EnsureMarketDataSubscriptionLocked(string symbol, Contract contract)
+    {
+        if (client?.IsConnected() != true || wrapper is null || marketDataSubscriptions.ContainsKey(symbol))
+        {
+            return;
+        }
+
+        var requestId = Interlocked.Increment(ref nextStreamingRequestId);
+        marketDataSubscriptions[symbol] = requestId;
+        wrapper.TrackMarketDataSubscription(requestId, symbol);
+        client.reqMktData(
+            requestId,
+            contract,
+            genericTickList: "",
+            snapshot: false,
+            regulatorySnaphsot: false,
+            mktDataOptions: []);
+    }
+
+    private void PublishMarketTick(IBKRMarketTick tick)
+    {
+        _ = hub.Clients.All.SendAsync("market.tick", new
+        {
+            symbol = tick.Symbol,
+            price = tick.Price,
+            time = tick.Time,
+            source = tick.Source
+        });
     }
 
     private async Task<BrokerConnectionTestResult> EnsureConnectedLockedAsync(CancellationToken cancellationToken)
@@ -359,6 +392,7 @@ public sealed class IBKRConnectionSession(
         sessionCts = null;
         messagePump = null;
         connectionKey = null;
+        marketDataSubscriptions.Clear();
     }
 
     private BrokerConnectionTestResult SaveResult(BrokerConnectionTestResult result)
@@ -572,14 +606,16 @@ public sealed class IBKRConnectionSession(
         }, cancellationToken);
     }
 
-    private sealed class SessionWrapper : DefaultEWrapper
+    private sealed class SessionWrapper(Action<IBKRMarketTick> onMarketTick) : DefaultEWrapper
     {
         private readonly TaskCompletionSource<int> handshakeSource = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly TaskCompletionSource<IReadOnlyList<string>> accountsSource = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly object diagnosticsLock = new();
         private readonly object positionsLock = new();
         private readonly object historicalDataLock = new();
+        private readonly object marketDataLock = new();
         private readonly List<string> diagnostics = [];
+        private readonly Dictionary<int, string> marketDataSymbols = [];
         private List<IBKRPositionSnapshot> positions = [];
         private TaskCompletionSource<IReadOnlyList<IBKRPositionSnapshot>> positionsSource = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private int historicalDataRequestId;
@@ -629,6 +665,31 @@ public sealed class IBKRConnectionSession(
             {
                 positionsSource.TrySetResult(positions.ToArray());
             }
+        }
+
+        public override void tickPrice(int tickerId, int field, double price, TickAttrib attribs)
+        {
+            if (price <= 0 || !IsTradePriceTick(field))
+            {
+                return;
+            }
+
+            string? symbol;
+            lock (marketDataLock)
+            {
+                marketDataSymbols.TryGetValue(tickerId, out symbol);
+            }
+
+            if (string.IsNullOrWhiteSpace(symbol))
+            {
+                return;
+            }
+
+            onMarketTick(new IBKRMarketTick(
+                symbol,
+                Convert.ToDecimal(price),
+                DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+                IsDelayedTick(field) ? "IBKR delayed tick" : "IBKR realtime tick"));
         }
 
         public override void historicalData(int reqId, Bar bar)
@@ -758,6 +819,14 @@ public sealed class IBKRConnectionSession(
             }
         }
 
+        public void TrackMarketDataSubscription(int requestId, string symbol)
+        {
+            lock (marketDataLock)
+            {
+                marketDataSymbols[requestId] = symbol;
+            }
+        }
+
         public async Task<IReadOnlyList<CandleResponse>?> WaitForHistoricalDataAsync(int requestId, TimeSpan timeout, CancellationToken cancellationToken)
         {
             Task<IReadOnlyList<CandleResponse>> task;
@@ -829,9 +898,19 @@ public sealed class IBKRConnectionSession(
         {
             return errorCode is 162 or 165 or 200 or 321 or 354 or 366 or 420;
         }
+
+        private static bool IsTradePriceTick(int field)
+        {
+            return field is TickType.LAST or TickType.DELAYED_LAST;
+        }
+
+        private static bool IsDelayedTick(int field)
+        {
+            return field is TickType.DELAYED_LAST;
+        }
     }
 
-    private sealed record HistoricalDataRequest(Contract Contract, string Duration, string BarSize)
+    private sealed record HistoricalDataRequest(string Symbol, Contract Contract, string Duration, string BarSize)
     {
         public static HistoricalDataRequest From(string symbol, string timeframe)
         {
@@ -846,7 +925,7 @@ public sealed class IBKRConnectionSession(
                 _ => throw new ArgumentException("Unsupported timeframe. Use 1m, 5m, 15m, or 1h.", nameof(timeframe))
             };
 
-            return new HistoricalDataRequest(BuildContract(normalizedSymbol), duration, barSize);
+            return new HistoricalDataRequest(symbol.Trim().ToUpperInvariant(), BuildContract(normalizedSymbol), duration, barSize);
         }
 
         private static string NormalizeTradingViewSymbol(string symbol)
@@ -897,4 +976,6 @@ public sealed class IBKRConnectionSession(
     }
 
     private sealed record IBKRPositionSnapshot(string Symbol, decimal Quantity, decimal AveragePrice);
+
+    private sealed record IBKRMarketTick(string Symbol, decimal Price, long Time, string Source);
 }

@@ -6,6 +6,13 @@ export type TradingUpdate = {
   occurred_at: string
 }
 
+export type MarketTick = {
+  symbol: string
+  price: number
+  time: number
+  source: string
+}
+
 export type RealtimeStatus = 'connecting' | 'connected' | 'disconnected'
 
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/+$/, '')
@@ -13,6 +20,7 @@ const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/+$/, '
 export function createTradingRealtimeClient(
   onUpdate: (update: TradingUpdate) => void,
   onStatusChange: (status: RealtimeStatus) => void,
+  onMarketTick?: (tick: MarketTick) => void,
 ) {
   const connection = new HubConnectionBuilder()
     .withUrl(`${API_BASE_URL}/hubs/trading`)
@@ -21,6 +29,9 @@ export function createTradingRealtimeClient(
     .build()
 
   connection.on('trading.updated', onUpdate)
+  if (onMarketTick) {
+    connection.on('market.tick', onMarketTick)
+  }
   connection.onreconnecting(() => onStatusChange('connecting'))
   connection.onreconnected(() => onStatusChange('connected'))
   connection.onclose(() => onStatusChange('disconnected'))

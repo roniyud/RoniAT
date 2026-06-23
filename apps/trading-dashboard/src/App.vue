@@ -38,8 +38,8 @@ import {
   updateRiskSettings,
 } from './services/api'
 import { getCandles, type Timeframe } from './services/market-data'
-import type { CandlestickData } from 'lightweight-charts'
-import { createTradingRealtimeClient, type RealtimeStatus, type TradingUpdate } from './services/realtime'
+import type { CandlestickData, UTCTimestamp } from 'lightweight-charts'
+import { createTradingRealtimeClient, type MarketTick, type RealtimeStatus, type TradingUpdate } from './services/realtime'
 import type { ApiState, AuditLogRecord, BrokerConnectionTestResult, BrokerMode, BrokerSettings, IBKRSettings, OrderRecord, PositionRecord, RiskSettings, TradingSignal, TradingSignalRequest } from './services/types'
 
 const apiState = ref<ApiState>('loading')
@@ -245,6 +245,56 @@ async function refreshCandles(showLoading = true) {
 
 function getChartRefreshIntervalMs(timeframe: Timeframe) {
   return timeframe === '1h' ? 30000 : 5000
+}
+
+function getTimeframeSeconds(timeframe: Timeframe) {
+  if (timeframe === '1m') return 60
+  if (timeframe === '5m') return 300
+  if (timeframe === '15m') return 900
+  return 3600
+}
+
+function applyMarketTick(tick: MarketTick) {
+  if (normalizeSymbol(tick.symbol) !== chartSymbol.value || !Number.isFinite(tick.price) || tick.price <= 0) {
+    return
+  }
+
+  const intervalSeconds = getTimeframeSeconds(selectedTimeframe.value)
+  const candleTime = Math.floor(tick.time / intervalSeconds) * intervalSeconds as UTCTimestamp
+  const latestCandle = chartCandles.value.at(-1)
+
+  if (!latestCandle || typeof latestCandle.time !== 'number') {
+    refreshCandles(false)
+    return
+  }
+
+  if (candleTime < latestCandle.time) {
+    return
+  }
+
+  if (candleTime > latestCandle.time) {
+    chartCandles.value = [
+      ...chartCandles.value.slice(-299),
+      {
+        time: candleTime,
+        open: tick.price,
+        high: tick.price,
+        low: tick.price,
+        close: tick.price,
+      },
+    ]
+    return
+  }
+
+  chartCandles.value = [
+    ...chartCandles.value.slice(0, -1),
+    {
+      ...latestCandle,
+      high: Math.max(latestCandle.high, tick.price),
+      low: Math.min(latestCandle.low, tick.price),
+      close: tick.price,
+    },
+  ]
 }
 
 function restartChartRefreshTimer() {
@@ -527,6 +577,7 @@ onMounted(() => {
     (status) => {
       realtimeStatus.value = status
     },
+    applyMarketTick,
   )
   realtimeClient.start().catch((error) => {
     realtimeStatus.value = 'disconnected'
