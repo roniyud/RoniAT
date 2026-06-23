@@ -3,7 +3,7 @@ using RoniAT.TradingEngine.Models;
 
 namespace RoniAT.TradingEngine.Services;
 
-public sealed class IBKRBrokerAdapter(BrokerSettingsStore settingsStore) : IBrokerAdapter
+public sealed class IBKRBrokerAdapter(BrokerSettingsStore settingsStore, BrokerConnectionStateStore connectionStateStore) : IBrokerAdapter
 {
     public string Name => "IBKR";
 
@@ -15,7 +15,18 @@ public sealed class IBKRBrokerAdapter(BrokerSettingsStore settingsStore) : IBrok
             && settings.Port > 0
             && !string.IsNullOrWhiteSpace(settings.Account);
 
-        var message = configured
+        var lastConnection = connectionStateStore.GetLastResult();
+        var connectionMatchesSettings = lastConnection is not null
+            && lastConnection.Mode == "IBKR"
+            && lastConnection.Environment.Equals(brokerSettings.IbkrEnvironment, StringComparison.OrdinalIgnoreCase)
+            && lastConnection.Host.Equals(settings.Host, StringComparison.OrdinalIgnoreCase)
+            && lastConnection.Port == settings.Port;
+
+        var connected = connectionMatchesSettings && lastConnection!.Ok;
+
+        var message = connectionMatchesSettings
+            ? lastConnection!.Message
+            : configured
             ? settings.Enabled ? $"IBKR {brokerSettings.IbkrEnvironment} skeleton configured; live connection not implemented" : $"IBKR {brokerSettings.IbkrEnvironment} configured but disabled"
             : $"IBKR {brokerSettings.IbkrEnvironment} not configured";
 
@@ -24,7 +35,7 @@ public sealed class IBKRBrokerAdapter(BrokerSettingsStore settingsStore) : IBrok
             Environment: brokerSettings.IbkrEnvironment,
             Configured: configured,
             Enabled: settings.Enabled,
-            Connected: false,
+            Connected: connected,
             ReadOnly: settings.ReadOnly,
             Message: message);
     }

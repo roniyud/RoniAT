@@ -33,13 +33,14 @@ import {
   lockTrading,
   resumeTrading,
   submitManualTrade,
+  testBrokerConnection,
   updateBrokerSettings,
   updateRiskSettings,
 } from './services/api'
 import { getCandles, type Timeframe } from './services/market-data'
 import type { CandlestickData } from 'lightweight-charts'
 import { createTradingRealtimeClient, type RealtimeStatus, type TradingUpdate } from './services/realtime'
-import type { ApiState, AuditLogRecord, BrokerMode, BrokerSettings, IBKRSettings, OrderRecord, PositionRecord, RiskSettings, TradingSignal, TradingSignalRequest } from './services/types'
+import type { ApiState, AuditLogRecord, BrokerConnectionTestResult, BrokerMode, BrokerSettings, IBKRSettings, OrderRecord, PositionRecord, RiskSettings, TradingSignal, TradingSignalRequest } from './services/types'
 
 const apiState = ref<ApiState>('loading')
 const activeTab = ref<'chart' | 'trade' | 'signals' | 'orders' | 'positions' | 'audit' | 'settings'>('chart')
@@ -58,10 +59,12 @@ const isRefreshing = ref(false)
 const activeAction = ref('')
 const isSavingRisk = ref(false)
 const isSavingBroker = ref(false)
+const isTestingBroker = ref(false)
 const isSubmittingTrade = ref(false)
 const isSafetyActionRunning = ref(false)
 const riskSaveMessage = ref('')
 const brokerSaveMessage = ref('')
+const brokerTestResult = ref<BrokerConnectionTestResult | null>(null)
 const tradeMessage = ref('')
 const selectedTimeframe = ref<Timeframe>('5m')
 const chartCandles = ref<CandlestickData[]>([])
@@ -238,6 +241,29 @@ async function handleSaveBrokerSettings() {
     errorMessage.value = error instanceof Error ? error.message : 'Broker settings update failed'
   } finally {
     isSavingBroker.value = false
+  }
+}
+
+async function handleTestBrokerConnection() {
+  if (!brokerForm.value) return
+
+  isTestingBroker.value = true
+  brokerSaveMessage.value = ''
+  errorMessage.value = ''
+
+  try {
+    const saved = await updateBrokerSettings(normalizeBrokerSettings(brokerForm.value))
+    brokerSettings.value = saved
+    brokerForm.value = cloneBrokerSettings(saved)
+    brokerTestResult.value = await testBrokerConnection()
+    brokerSaveMessage.value = brokerTestResult.value.ok
+      ? 'Connection test succeeded'
+      : `Connection test failed: ${brokerTestResult.value.message}`
+    await refreshData()
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : 'Broker connection test failed'
+  } finally {
+    isTestingBroker.value = false
   }
 }
 
@@ -841,7 +867,7 @@ watch([chartSymbol, selectedTimeframe], () => {
           <div class="broker-status-card">
             <div>
               <span>Broker Status</span>
-              <strong>{{ brokerStatus?.message || 'Paper broker active' }}</strong>
+              <strong>{{ brokerTestResult?.message || brokerStatus?.message || 'Paper broker active' }}</strong>
             </div>
             <div class="broker-status-flags">
               <span class="status-pill" :class="brokerStatus?.configured ? 'paper-position-opened' : 'rejected-by-risk'">
@@ -959,6 +985,10 @@ watch([chartSymbol, selectedTimeframe], () => {
 
           <div class="settings-actions">
             <span class="save-message">{{ brokerSaveMessage }}</span>
+            <button class="action-button secondary" type="button" :disabled="isSavingBroker || isTestingBroker" @click="handleTestBrokerConnection">
+              <Server :size="16" />
+              <span>{{ isTestingBroker ? 'Testing' : 'Test Connection' }}</span>
+            </button>
             <button class="action-button secondary" type="submit" :disabled="isSavingBroker">
               <Server :size="16" />
               <span>{{ isSavingBroker ? 'Saving' : 'Save Broker Settings' }}</span>

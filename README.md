@@ -100,9 +100,12 @@ Broker settings endpoints:
 ```text
 GET /api/broker/settings
 PUT /api/broker/settings
+POST /api/broker/test-connection
 ```
 
 `IBKR` is currently a skeleton adapter only: it reports configuration status, writes audit/broker events, and blocks live order actions with `broker_blocked` status. It does not connect to TWS/Gateway or place live orders yet.
+
+The connection test is a TCP reachability check to the configured Gateway host/port. It does not authenticate, subscribe to data, request account state, or place orders.
 
 IBKR skeleton settings:
 

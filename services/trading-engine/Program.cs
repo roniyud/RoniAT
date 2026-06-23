@@ -80,6 +80,8 @@ builder.Services.Configure<BrokerSettings>(options =>
     };
 });
 builder.Services.AddSingleton<BrokerSettingsStore>();
+builder.Services.AddSingleton<BrokerConnectionStateStore>();
+builder.Services.AddScoped<IBKRConnectionTester>();
 builder.Services.AddScoped<PaperBrokerAdapter>();
 builder.Services.AddScoped<IBKRBrokerAdapter>();
 builder.Services.AddScoped<BrokerRouterAdapter>();
@@ -257,6 +259,21 @@ app.MapPut("/api/broker/settings", async (BrokerSettingsUpdateRequest request, B
     return Results.Ok(BrokerSettingsResponse.FromSettings(result.Settings));
 })
 .WithName("UpdateBrokerSettings")
+.WithOpenApi();
+
+app.MapPost("/api/broker/test-connection", async (IBKRConnectionTester tester, TradingDbContext db, IHubContext<TradingHub> hub, CancellationToken cancellationToken) =>
+{
+    var result = await tester.TestAsync(cancellationToken);
+    db.AuditLogs.Add(AuditLogRecord.BrokerAction(
+        result.Ok ? "broker.connection_test_succeeded" : "broker.connection_test_failed",
+        $"{result.Mode} {result.Environment} connection test to {result.Host}:{result.Port} - {result.Message}"));
+    await db.SaveChangesAsync(cancellationToken);
+
+    await BroadcastTradingUpdateAsync(hub, result.Ok ? "broker.connection_test_succeeded" : "broker.connection_test_failed", null);
+
+    return Results.Ok(BrokerConnectionTestResponse.FromResult(result));
+})
+.WithName("TestBrokerConnection")
 .WithOpenApi();
 
 app.MapGet("/api/risk/settings", (RiskSettingsStore settingsStore) =>

@@ -1,4 +1,4 @@
-import type { AuditLogRecord, BrokerMode, BrokerSettings, OrderRecord, PaperActionResult, PositionRecord, RiskSettings, TradingSignal, TradingSignalRequest } from './types'
+import type { AuditLogRecord, BrokerConnectionTestResult, BrokerMode, BrokerSettings, OrderRecord, PaperActionResult, PositionRecord, RiskSettings, TradingSignal, TradingSignalRequest } from './types'
 
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/+$/, '')
 
@@ -47,6 +47,23 @@ export async function updateBrokerSettings(settings: BrokerSettings) {
   }
 
   return response.json() as Promise<BrokerSettings>
+}
+
+export async function testBrokerConnection() {
+  const response = await fetch(`${API_BASE_URL}/api/broker/test-connection`, {
+    method: 'POST',
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({}),
+  })
+
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status} from Trading Engine`)
+  }
+
+  return response.json() as Promise<BrokerConnectionTestResult>
 }
 
 export async function getRiskSettings() {

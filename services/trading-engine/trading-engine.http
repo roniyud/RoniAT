@@ -77,6 +77,13 @@ Accept: application/json
 
 ###
 
+POST {{trading_engine_HostAddress}}/api/broker/test-connection
+Content-Type: application/json
+
+{}
+
+###
+
 PUT {{trading_engine_HostAddress}}/api/broker/settings
 Content-Type: application/json
 

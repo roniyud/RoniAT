@@ -68,6 +68,16 @@ export type BrokerMode = {
   message: string
 }
 
+export type BrokerConnectionTestResult = {
+  ok: boolean
+  mode: string
+  environment: string
+  host: string
+  port: number
+  message: string
+  tested_at: string
+}
+
 export type IBKRSettings = {
   host: string
   port: number
