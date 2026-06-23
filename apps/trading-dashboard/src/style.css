@@ -489,6 +489,33 @@ tr:last-child td {
   background: #fde2e2;
 }
 
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 112px;
+  padding: 4px 8px;
+  border: 1px solid #dfe5e7;
+  border-radius: 999px;
+  color: #475467;
+  background: #f8fafb;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.status-pill.paper-position-opened,
+.status-pill.accepted {
+  color: #06603f;
+  border-color: #b7ead4;
+  background: #def7ec;
+}
+
+.status-pill.rejected-by-risk {
+  color: #9f1d1d;
+  border-color: #f1bbbb;
+  background: #fde2e2;
+}
+
 .empty-state {
   display: grid;
   min-height: 220px;

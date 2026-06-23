@@ -51,6 +51,11 @@ Accept: application/json
 
 ###
 
+GET {{trading_engine_HostAddress}}/api/risk/settings
+Accept: application/json
+
+###
+
 POST {{trading_engine_HostAddress}}/api/broker/orders/cancel-working
 Content-Type: application/json
 

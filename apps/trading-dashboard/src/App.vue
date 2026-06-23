@@ -50,6 +50,8 @@ const workingOrders = computed(() => orders.value.filter((order) => order.status
 const workingOrderCount = computed(() => workingOrders.value.length)
 const filledOrderCount = computed(() => orders.value.filter((order) => order.status === 'filled').length)
 const cancelledOrderCount = computed(() => orders.value.filter((order) => order.status === 'cancelled').length)
+const rejectedSignalCount = computed(() => signals.value.filter((signal) => signal.status === 'rejected_by_risk').length)
+const approvedSignalCount = computed(() => signals.value.length - rejectedSignalCount.value)
 const chartSymbol = computed(() => signals.value[0]?.symbol || positions.value[0]?.symbol || 'MNQ1!')
 
 async function refreshData() {
@@ -157,6 +159,10 @@ function formatDateTime(value: string | null | undefined) {
 
 function getWorkingOrdersForSymbol(symbol: string) {
   return workingOrders.value.filter((order) => order.symbol === symbol)
+}
+
+function getStatusClass(status: string) {
+  return status.replace(/[^a-z0-9]+/gi, '-').toLowerCase()
 }
 
 onMounted(() => {
@@ -285,7 +291,10 @@ watch([chartSymbol, selectedTimeframe], () => {
 
       <div v-if="activeTab === 'signals'" class="data-panel">
         <div class="panel-header">
-          <h2>Total Signals</h2>
+          <div>
+            <h2>Total Signals</h2>
+            <p class="panel-subtitle">{{ approvedSignalCount }} approved / {{ rejectedSignalCount }} rejected by risk</p>
+          </div>
           <span class="count-pill">{{ signals.length }}</span>
         </div>
 
@@ -317,7 +326,9 @@ watch([chartSymbol, selectedTimeframe], () => {
                 <td>{{ formatPrice(signal.stop_loss) }}</td>
                 <td>{{ formatPrice(signal.take_profit_1) }}</td>
                 <td>{{ formatPrice(signal.take_profit_2) }}</td>
-                <td>{{ signal.status }}</td>
+                <td>
+                  <span class="status-pill" :class="getStatusClass(signal.status)">{{ signal.status }}</span>
+                </td>
               </tr>
             </tbody>
           </table>

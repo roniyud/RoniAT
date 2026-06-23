@@ -45,6 +45,15 @@ builder.Services.AddDbContext<TradingDbContext>(options =>
 {
     options.UseSqlite(connectionString);
 });
+builder.Services.Configure<RiskSettings>(builder.Configuration.GetSection("Risk"));
+builder.Services.PostConfigure<RiskSettings>(settings =>
+{
+    if (settings.AllowedSymbols.Length == 0)
+    {
+        settings.AllowedSymbols = ["MNQ1!"];
+    }
+});
+builder.Services.AddScoped<RiskValidator>();
 builder.Services.AddScoped<PaperBrokerAdapter>();
 builder.Services.AddScoped<IBrokerAdapter>(serviceProvider =>
 {
@@ -78,7 +87,7 @@ app.MapGet("/health", () => Results.Ok(new { status = "ok", service = "trading-e
 
 app.MapHub<TradingHub>("/hubs/trading");
 
-app.MapPost("/api/signals", async (TradingSignalRequest request, TradingDbContext db, IBrokerAdapter brokerAdapter, IHubContext<TradingHub> hub) =>
+app.MapPost("/api/signals", async (TradingSignalRequest request, TradingDbContext db, IBrokerAdapter brokerAdapter, RiskValidator riskValidator, IHubContext<TradingHub> hub) =>
 {
     var validation = TradingSignalValidator.Validate(request);
     if (!validation.Ok)
@@ -93,6 +102,19 @@ app.MapPost("/api/signals", async (TradingSignalRequest request, TradingDbContex
     db.AuditLogs.Add(AuditLogRecord.SignalAccepted(signal));
     await db.SaveChangesAsync();
 
+    var riskValidation = await riskValidator.ValidateEntrySignalAsync(signal, db);
+    if (!riskValidation.IsApproved)
+    {
+        signal.Status = "rejected_by_risk";
+        db.AuditLogs.Add(AuditLogRecord.RiskRejected(signal, riskValidation.Reasons));
+        await db.SaveChangesAsync();
+
+        await BroadcastTradingUpdateAsync(hub, "signal.rejected", signal.Symbol);
+
+        return Results.Created($"/api/signals/{signal.Id}", TradingSignalResponse.FromRecord(signal));
+    }
+
+    db.AuditLogs.Add(AuditLogRecord.RiskApproved(signal));
     await brokerAdapter.ApplyEntrySignalAsync(signal, db);
     await db.SaveChangesAsync();
 
@@ -178,6 +200,13 @@ app.MapGet("/api/market-data/candles", (string? symbol, string? timeframe, IMark
 
 app.MapGet("/api/broker", (IBrokerAdapter brokerAdapter) => Results.Ok(new { mode = brokerAdapter.Name }))
 .WithName("GetBrokerMode")
+.WithOpenApi();
+
+app.MapGet("/api/risk/settings", (Microsoft.Extensions.Options.IOptions<RiskSettings> settings) =>
+{
+    return Results.Ok(RiskSettingsResponse.FromSettings(settings.Value));
+})
+.WithName("GetRiskSettings")
 .WithOpenApi();
 
 app.MapPost("/api/broker/orders/cancel-working", async (SymbolActionRequest request, TradingDbContext db, IBrokerAdapter brokerAdapter, IHubContext<TradingHub> hub) =>

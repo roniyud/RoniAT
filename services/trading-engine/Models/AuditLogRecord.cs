@@ -17,6 +17,26 @@ public sealed class AuditLogRecord
         };
     }
 
+    public static AuditLogRecord RiskApproved(TradingSignalRecord signal)
+    {
+        return new AuditLogRecord
+        {
+            Action = "risk.approved",
+            Details = $"Risk approved signal {signal.Id} {signal.Symbol} {signal.Direction} {signal.Contracts}",
+            CreatedAt = DateTimeOffset.UtcNow
+        };
+    }
+
+    public static AuditLogRecord RiskRejected(TradingSignalRecord signal, IReadOnlyList<string> reasons)
+    {
+        return new AuditLogRecord
+        {
+            Action = "risk.rejected",
+            Details = $"Risk rejected signal {signal.Id} {signal.Symbol}: {string.Join("; ", reasons)}",
+            CreatedAt = DateTimeOffset.UtcNow
+        };
+    }
+
     public static AuditLogRecord PaperPositionOpened(TradingSignalRecord signal)
     {
         return new AuditLogRecord
