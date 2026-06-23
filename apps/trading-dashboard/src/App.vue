@@ -109,6 +109,7 @@ const manualTrade = ref<TradingSignalRequest>({
 })
 
 const chartSymbol = computed(() => selectedChartSymbol.value.trim().toUpperCase() || 'MNQ1!')
+const latestChartPrice = computed(() => chartCandles.value.at(-1)?.close ?? null)
 const availableChartSymbols = computed(() => {
   const symbols = new Set<string>()
   const candidates = [
@@ -178,9 +179,45 @@ const chartLevels = computed(() => {
 
   return levels.filter((level) => Number.isFinite(level.price))
 })
+const activeChartTrade = computed(() => {
+  const symbol = chartSymbol.value
+  const position = positions.value.find((item) => normalizeSymbol(item.symbol) === symbol)
+  if (!position) return null
+
+  const currentPrice = latestChartPrice.value
+  const pointValue = getPointValue(symbol)
+  const directionMultiplier = position.direction.toUpperCase() === 'SHORT' ? -1 : 1
+  const estimatedPnl = currentPrice == null
+    ? null
+    : (currentPrice - position.averagePrice) * directionMultiplier * position.quantity * pointValue
+  const positionOrders = workingOrders.value.filter((order) => normalizeSymbol(order.symbol) === symbol)
+
+  return {
+    symbol,
+    direction: position.direction,
+    quantity: position.quantity,
+    averagePrice: position.averagePrice,
+    currentPrice,
+    estimatedPnl,
+    stopLoss: position.stopLoss,
+    takeProfit1: position.takeProfit1,
+    takeProfit2: position.takeProfit2,
+    workingOrders: positionOrders.length,
+    updatedAt: position.updatedAt,
+  }
+})
 
 function normalizeSymbol(symbol?: string | null) {
   return symbol?.trim().toUpperCase() ?? ''
+}
+
+function getPointValue(symbol: string) {
+  const normalized = normalizeSymbol(symbol).replace('1!', '')
+  if (normalized === 'MNQ') return 2
+  if (normalized === 'NQ') return 20
+  if (normalized === 'MES') return 5
+  if (normalized === 'ES') return 50
+  return 1
 }
 
 async function refreshData() {
@@ -753,6 +790,7 @@ watch(activeTab, (tab) => {
       <CandlestickChart
         v-if="activeTab === 'chart'"
         :available-symbols="availableChartSymbols"
+        :active-trade="activeChartTrade"
         :candles="chartCandles"
         :error-message="chartError"
         :is-loading="isChartLoading"

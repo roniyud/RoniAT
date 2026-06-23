@@ -20,7 +20,22 @@ type ChartPriceLevel = {
   style?: 'solid' | 'dashed' | 'dotted'
 }
 
+type ActiveTrade = {
+  symbol: string
+  direction: string
+  quantity: number
+  averagePrice: number
+  currentPrice: number | null
+  estimatedPnl: number | null
+  stopLoss?: number | null
+  takeProfit1?: number | null
+  takeProfit2?: number | null
+  workingOrders: number
+  updatedAt?: string | null
+}
+
 const props = defineProps<{
+  activeTrade: ActiveTrade | null
   availableSymbols: string[]
   candles: CandlestickData[]
   errorMessage: string
@@ -43,6 +58,24 @@ let resizeObserver: ResizeObserver | null = null
 
 const latestCandle = computed(() => props.candles.at(-1))
 const formattedSymbol = computed(() => props.symbol.trim().toUpperCase())
+const tradePnlClass = computed(() => {
+  if (props.activeTrade?.estimatedPnl == null) return ''
+  return props.activeTrade.estimatedPnl >= 0 ? 'positive' : 'negative'
+})
+
+function formatPrice(value: number | null | undefined) {
+  if (value == null) return '-'
+  return value.toLocaleString('en-US', { maximumFractionDigits: 2 })
+}
+
+function formatCurrency(value: number | null | undefined) {
+  if (value == null) return '-'
+  return value.toLocaleString('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    maximumFractionDigits: 2,
+  })
+}
 
 function setTimeframe(timeframe: Timeframe) {
   emit('timeframeChange', timeframe)
@@ -196,6 +229,43 @@ onUnmounted(() => {
         </div>
       </div>
     </header>
+
+    <section class="active-trade" :class="activeTrade ? activeTrade.direction.toLowerCase() : 'empty'">
+      <div class="active-trade-main">
+        <span>Active Position</span>
+        <strong v-if="activeTrade">
+          {{ activeTrade.direction }} {{ activeTrade.quantity }} {{ activeTrade.symbol }}
+        </strong>
+        <strong v-else>No active position for {{ formattedSymbol }}</strong>
+      </div>
+
+      <div v-if="activeTrade" class="active-trade-grid">
+        <div>
+          <span>Avg</span>
+          <strong>{{ formatPrice(activeTrade.averagePrice) }}</strong>
+        </div>
+        <div>
+          <span>Last</span>
+          <strong>{{ formatPrice(activeTrade.currentPrice) }}</strong>
+        </div>
+        <div>
+          <span>P&L Est.</span>
+          <strong :class="tradePnlClass">{{ formatCurrency(activeTrade.estimatedPnl) }}</strong>
+        </div>
+        <div>
+          <span>SL</span>
+          <strong>{{ formatPrice(activeTrade.stopLoss) }}</strong>
+        </div>
+        <div>
+          <span>TP</span>
+          <strong>{{ formatPrice(activeTrade.takeProfit1) }} / {{ formatPrice(activeTrade.takeProfit2) }}</strong>
+        </div>
+        <div>
+          <span>Working Orders</span>
+          <strong>{{ activeTrade.workingOrders }}</strong>
+        </div>
+      </div>
+    </section>
 
     <div v-if="levels.length" class="chart-levels" aria-label="Chart levels">
       <span v-for="level in levels" :key="level.id" class="level-chip">

@@ -390,6 +390,71 @@ h3 {
   box-shadow: 0 1px 4px rgba(28, 35, 38, 0.1);
 }
 
+.active-trade {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.8fr) minmax(0, 2fr);
+  gap: 12px;
+  padding: 12px 16px;
+  border-bottom: 1px solid #edf0f2;
+  background: #f8fafb;
+}
+
+.active-trade.long {
+  border-left: 4px solid #13795b;
+}
+
+.active-trade.short {
+  border-left: 4px solid #b42318;
+}
+
+.active-trade.empty {
+  grid-template-columns: 1fr;
+  border-left: 4px solid #94a3b8;
+}
+
+.active-trade-main span,
+.active-trade-grid span {
+  display: block;
+  color: #667085;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.active-trade-main strong {
+  display: block;
+  margin-top: 4px;
+  color: #102321;
+  font-size: 18px;
+}
+
+.active-trade-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.active-trade-grid div {
+  min-width: 0;
+}
+
+.active-trade-grid strong {
+  display: block;
+  overflow: hidden;
+  margin-top: 4px;
+  color: #181a1b;
+  font-size: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.active-trade-grid strong.positive {
+  color: #13795b;
+}
+
+.active-trade-grid strong.negative {
+  color: #b42318;
+}
+
 .chart-levels {
   display: flex;
   gap: 8px;
@@ -1038,6 +1103,14 @@ tr:last-child td {
     width: 100%;
   }
 
+  .active-trade {
+    grid-template-columns: 1fr;
+  }
+
+  .active-trade-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
   .chart-surface {
     height: 360px;
   }
@@ -1106,6 +1179,14 @@ tr:last-child td {
 
   .chart-levels {
     padding: 8px 10px;
+  }
+
+  .active-trade {
+    padding: 10px;
+  }
+
+  .active-trade-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .level-chip {
