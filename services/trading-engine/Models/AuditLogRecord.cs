@@ -19,6 +19,16 @@ public sealed class AuditLogRecord
         };
     }
 
+    public static AuditLogRecord ManualTradeSubmitted(TradingSignalRecord signal)
+    {
+        return new AuditLogRecord
+        {
+            Action = "manual_trade.submitted",
+            Details = $"Manual trade {signal.Symbol} {signal.Direction} {signal.Contracts} submitted as signal {signal.Id}",
+            CreatedAt = DateTimeOffset.UtcNow
+        };
+    }
+
     public static AuditLogRecord RiskApproved(TradingSignalRecord signal)
     {
         return new AuditLogRecord

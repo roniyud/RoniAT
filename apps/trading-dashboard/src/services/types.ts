@@ -14,6 +14,17 @@ export type TradingSignal = {
   created_at: string
 }
 
+export type TradingSignalRequest = {
+  type: 'entry'
+  direction: 'LONG' | 'SHORT'
+  contracts: number
+  stop_loss: number
+  take_profit_1: number
+  take_profit_2: number
+  entry_price: number
+  symbol: string
+}
+
 export type OrderRecord = {
   id: number
   signalId?: number | null

@@ -89,41 +89,13 @@ app.MapGet("/health", () => Results.Ok(new { status = "ok", service = "trading-e
 app.MapHub<TradingHub>("/hubs/trading");
 
 app.MapPost("/api/signals", async (TradingSignalRequest request, TradingDbContext db, IBrokerAdapter brokerAdapter, RiskValidator riskValidator, IHubContext<TradingHub> hub) =>
-{
-    var validation = TradingSignalValidator.Validate(request);
-    if (!validation.Ok)
-    {
-        return Results.BadRequest(new ValidationErrorResponse(validation.Errors));
-    }
-
-    var normalized = validation.Signal!;
-    var signal = TradingSignalRecord.FromRequest(normalized);
-
-    db.Signals.Add(signal);
-    db.AuditLogs.Add(AuditLogRecord.SignalAccepted(signal));
-    await db.SaveChangesAsync();
-
-    var riskValidation = await riskValidator.ValidateEntrySignalAsync(signal, db);
-    if (!riskValidation.IsApproved)
-    {
-        signal.Status = "rejected_by_risk";
-        db.AuditLogs.Add(AuditLogRecord.RiskRejected(signal, riskValidation.Reasons));
-        await db.SaveChangesAsync();
-
-        await BroadcastTradingUpdateAsync(hub, "signal.rejected", signal.Symbol);
-
-        return Results.Created($"/api/signals/{signal.Id}", TradingSignalResponse.FromRecord(signal));
-    }
-
-    db.AuditLogs.Add(AuditLogRecord.RiskApproved(signal));
-    await brokerAdapter.ApplyEntrySignalAsync(signal, db);
-    await db.SaveChangesAsync();
-
-    await BroadcastTradingUpdateAsync(hub, "signal.created", signal.Symbol);
-
-    return Results.Created($"/api/signals/{signal.Id}", TradingSignalResponse.FromRecord(signal));
-})
+    await ProcessSignalAsync(request, isManualTrade: false, db, brokerAdapter, riskValidator, hub))
 .WithName("CreateSignal")
+.WithOpenApi();
+
+app.MapPost("/api/manual-trades", async (TradingSignalRequest request, TradingDbContext db, IBrokerAdapter brokerAdapter, RiskValidator riskValidator, IHubContext<TradingHub> hub) =>
+    await ProcessSignalAsync(request, isManualTrade: true, db, brokerAdapter, riskValidator, hub))
+.WithName("CreateManualTrade")
 .WithOpenApi();
 
 app.MapGet("/api/signals", async (TradingDbContext db) =>
@@ -355,4 +327,45 @@ static Task BroadcastTradingUpdateAsync(IHubContext<TradingHub> hub, string even
         symbol,
         occurred_at = DateTimeOffset.UtcNow
     });
+}
+
+static async Task<IResult> ProcessSignalAsync(TradingSignalRequest request, bool isManualTrade, TradingDbContext db, IBrokerAdapter brokerAdapter, RiskValidator riskValidator, IHubContext<TradingHub> hub)
+{
+    var validation = TradingSignalValidator.Validate(request);
+    if (!validation.Ok)
+    {
+        return Results.BadRequest(new ValidationErrorResponse(validation.Errors));
+    }
+
+    var normalized = validation.Signal!;
+    var signal = TradingSignalRecord.FromRequest(normalized);
+
+    db.Signals.Add(signal);
+    db.AuditLogs.Add(AuditLogRecord.SignalAccepted(signal));
+    await db.SaveChangesAsync();
+
+    if (isManualTrade)
+    {
+        db.AuditLogs.Add(AuditLogRecord.ManualTradeSubmitted(signal));
+    }
+
+    var riskValidation = await riskValidator.ValidateEntrySignalAsync(signal, db);
+    if (!riskValidation.IsApproved)
+    {
+        signal.Status = "rejected_by_risk";
+        db.AuditLogs.Add(AuditLogRecord.RiskRejected(signal, riskValidation.Reasons));
+        await db.SaveChangesAsync();
+
+        await BroadcastTradingUpdateAsync(hub, isManualTrade ? "manual_trade.rejected" : "signal.rejected", signal.Symbol);
+
+        return Results.Created($"/api/signals/{signal.Id}", TradingSignalResponse.FromRecord(signal));
+    }
+
+    db.AuditLogs.Add(AuditLogRecord.RiskApproved(signal));
+    await brokerAdapter.ApplyEntrySignalAsync(signal, db);
+    await db.SaveChangesAsync();
+
+    await BroadcastTradingUpdateAsync(hub, isManualTrade ? "manual_trade.created" : "signal.created", signal.Symbol);
+
+    return Results.Created($"/api/signals/{signal.Id}", TradingSignalResponse.FromRecord(signal));
 }

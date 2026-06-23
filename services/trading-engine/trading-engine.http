@@ -21,6 +21,22 @@ Content-Type: application/json
 
 ###
 
+POST {{trading_engine_HostAddress}}/api/manual-trades
+Content-Type: application/json
+
+{
+  "type": "entry",
+  "direction": "SHORT",
+  "contracts": 1,
+  "stop_loss": 30755.5,
+  "take_profit_1": 30709.5,
+  "take_profit_2": 30686.25,
+  "entry_price": 30736.25,
+  "symbol": "MNQ1!"
+}
+
+###
+
 GET {{trading_engine_HostAddress}}/api/signals
 Accept: application/json
 

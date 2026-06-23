@@ -10,6 +10,7 @@ import {
   ListChecks,
   RefreshCw,
   ScrollText,
+  Send,
   Server,
   Settings2,
   ShieldCheck,
@@ -27,15 +28,16 @@ import {
   getPositions,
   getRiskSettings,
   getSignals,
+  submitManualTrade,
   updateRiskSettings,
 } from './services/api'
 import { getCandles, type Timeframe } from './services/market-data'
 import type { CandlestickData } from 'lightweight-charts'
 import { createTradingRealtimeClient, type RealtimeStatus, type TradingUpdate } from './services/realtime'
-import type { ApiState, AuditLogRecord, OrderRecord, PositionRecord, RiskSettings, TradingSignal } from './services/types'
+import type { ApiState, AuditLogRecord, OrderRecord, PositionRecord, RiskSettings, TradingSignal, TradingSignalRequest } from './services/types'
 
 const apiState = ref<ApiState>('loading')
-const activeTab = ref<'chart' | 'signals' | 'orders' | 'positions' | 'audit' | 'settings'>('chart')
+const activeTab = ref<'chart' | 'trade' | 'signals' | 'orders' | 'positions' | 'audit' | 'settings'>('chart')
 const signals = ref<TradingSignal[]>([])
 const orders = ref<OrderRecord[]>([])
 const positions = ref<PositionRecord[]>([])
@@ -48,7 +50,9 @@ const errorMessage = ref('')
 const isRefreshing = ref(false)
 const activeAction = ref('')
 const isSavingRisk = ref(false)
+const isSubmittingTrade = ref(false)
 const riskSaveMessage = ref('')
+const tradeMessage = ref('')
 const selectedTimeframe = ref<Timeframe>('5m')
 const chartCandles = ref<CandlestickData[]>([])
 const chartError = ref('')
@@ -66,6 +70,16 @@ const cancelledOrderCount = computed(() => orders.value.filter((order) => order.
 const rejectedSignalCount = computed(() => signals.value.filter((signal) => signal.status === 'rejected_by_risk').length)
 const approvedSignalCount = computed(() => signals.value.length - rejectedSignalCount.value)
 const chartSymbol = computed(() => signals.value[0]?.symbol || positions.value[0]?.symbol || 'MNQ1!')
+const manualTrade = ref<TradingSignalRequest>({
+  type: 'entry',
+  direction: 'SHORT',
+  contracts: 1,
+  stop_loss: 30755.5,
+  take_profit_1: 30709.5,
+  take_profit_2: 30686.25,
+  entry_price: 30736.25,
+  symbol: 'MNQ1!',
+})
 
 async function refreshData() {
   isRefreshing.value = true
@@ -177,6 +191,33 @@ async function handleSaveRiskSettings() {
     errorMessage.value = error instanceof Error ? error.message : 'Risk settings update failed'
   } finally {
     isSavingRisk.value = false
+  }
+}
+
+async function handleSubmitManualTrade() {
+  isSubmittingTrade.value = true
+  tradeMessage.value = ''
+  errorMessage.value = ''
+
+  try {
+    const result = await submitManualTrade({
+      ...manualTrade.value,
+      symbol: manualTrade.value.symbol.trim().toUpperCase(),
+      contracts: Number(manualTrade.value.contracts),
+      entry_price: Number(manualTrade.value.entry_price),
+      stop_loss: Number(manualTrade.value.stop_loss),
+      take_profit_1: Number(manualTrade.value.take_profit_1),
+      take_profit_2: Number(manualTrade.value.take_profit_2),
+    })
+
+    tradeMessage.value = result.status === 'rejected_by_risk'
+      ? `Rejected by risk as signal ${result.id}`
+      : `Submitted as signal ${result.id}`
+    await refreshData()
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : 'Manual trade failed'
+  } finally {
+    isSubmittingTrade.value = false
   }
 }
 
@@ -346,6 +387,10 @@ watch([chartSymbol, selectedTimeframe], () => {
         <BarChart3 :size="18" />
         <span>Chart</span>
       </button>
+      <button type="button" :class="{ active: activeTab === 'trade' }" @click="activeTab = 'trade'">
+        <Send :size="18" />
+        <span>Trade</span>
+      </button>
       <button type="button" :class="{ active: activeTab === 'signals' }" @click="activeTab = 'signals'">
         <ListChecks :size="18" />
         <span>Signals</span>
@@ -378,6 +423,70 @@ watch([chartSymbol, selectedTimeframe], () => {
         :timeframe="selectedTimeframe"
         @timeframe-change="selectedTimeframe = $event"
       />
+
+      <div v-if="activeTab === 'trade'" class="data-panel trade-panel">
+        <div class="panel-header">
+          <div>
+            <h2>Manual Trade</h2>
+            <p class="panel-subtitle">Broker {{ brokerMode }} / Risk {{ riskSettings?.enable_auto_trading ? 'Auto On' : 'Auto Off' }}</p>
+          </div>
+          <span class="status-pill" :class="brokerMode.toLowerCase()">{{ brokerMode }}</span>
+        </div>
+
+        <form class="trade-form" @submit.prevent="handleSubmitManualTrade">
+          <div class="side-control">
+            <button
+              type="button"
+              :class="{ active: manualTrade.direction === 'LONG' }"
+              @click="manualTrade.direction = 'LONG'"
+            >
+              LONG
+            </button>
+            <button
+              type="button"
+              :class="{ active: manualTrade.direction === 'SHORT' }"
+              @click="manualTrade.direction = 'SHORT'"
+            >
+              SHORT
+            </button>
+          </div>
+
+          <div class="settings-grid">
+            <label>
+              <span>Symbol</span>
+              <input v-model="manualTrade.symbol" type="text" autocomplete="off" spellcheck="false" />
+            </label>
+            <label>
+              <span>Contracts</span>
+              <input v-model.number="manualTrade.contracts" type="number" min="1" max="100" />
+            </label>
+            <label>
+              <span>Entry Price</span>
+              <input v-model.number="manualTrade.entry_price" type="number" step="0.25" />
+            </label>
+            <label>
+              <span>Stop Loss</span>
+              <input v-model.number="manualTrade.stop_loss" type="number" step="0.25" />
+            </label>
+            <label>
+              <span>Take Profit 1</span>
+              <input v-model.number="manualTrade.take_profit_1" type="number" step="0.25" />
+            </label>
+            <label>
+              <span>Take Profit 2</span>
+              <input v-model.number="manualTrade.take_profit_2" type="number" step="0.25" />
+            </label>
+          </div>
+
+          <div class="settings-actions">
+            <span class="save-message">{{ tradeMessage }}</span>
+            <button class="action-button secondary" type="submit" :disabled="isSubmittingTrade">
+              <Send :size="16" />
+              <span>{{ isSubmittingTrade ? 'Submitting' : 'Submit Trade' }}</span>
+            </button>
+          </div>
+        </form>
+      </div>
 
       <div v-if="activeTab === 'signals'" class="data-panel">
         <div class="panel-header">
