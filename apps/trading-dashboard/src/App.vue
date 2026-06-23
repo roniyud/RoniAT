@@ -132,18 +132,8 @@ const availableChartSymbols = computed(() => {
 const chartLevels = computed(() => {
   const symbol = chartSymbol.value
   const levels: { id: string; label: string; price: number; color: string; style?: 'solid' | 'dashed' | 'dotted' }[] = []
-  const latestSignal = signals.value.find((signal) => normalizeSymbol(signal.symbol) === symbol)
   const symbolPosition = positions.value.find((position) => normalizeSymbol(position.symbol) === symbol)
   const symbolOrders = orders.value.filter((order) => normalizeSymbol(order.symbol) === symbol && order.status === 'working')
-
-  if (latestSignal) {
-    levels.push(
-      { id: `signal-${latestSignal.id}-entry`, label: 'Entry', price: latestSignal.entry_price, color: '#2563eb', style: 'solid' },
-      { id: `signal-${latestSignal.id}-sl`, label: 'SL', price: latestSignal.stop_loss, color: '#b42318', style: 'dashed' },
-      { id: `signal-${latestSignal.id}-tp1`, label: 'TP1', price: latestSignal.take_profit_1, color: '#13795b', style: 'dashed' },
-      { id: `signal-${latestSignal.id}-tp2`, label: 'TP2', price: latestSignal.take_profit_2, color: '#0f766e', style: 'dotted' },
-    )
-  }
 
   if (symbolPosition) {
     levels.push({
