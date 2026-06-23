@@ -19,8 +19,6 @@ public sealed class IBKRReadOnlyHandshakeClient
         var wrapper = new ReadOnlyWrapper();
         var signal = new EReaderMonitorSignal();
         var client = new EClientSocket(wrapper, signal);
-        client.AsyncEConnect = true;
-        wrapper.SetStartApi(client.startApi);
         Task? messagePump = null;
 
         try
@@ -35,8 +33,16 @@ public sealed class IBKRReadOnlyHandshakeClient
             {
                 while (!timeout.IsCancellationRequested)
                 {
-                    signal.waitForSignal();
-                    reader.processMsgs();
+                    try
+                    {
+                        signal.waitForSignal();
+                        reader.processMsgs();
+                    }
+                    catch (Exception error)
+                    {
+                        wrapper.CaptureReaderError(error);
+                        break;
+                    }
                 }
             }, CancellationToken.None);
 
@@ -144,17 +150,10 @@ public sealed class IBKRReadOnlyHandshakeClient
         private readonly TaskCompletionSource<IReadOnlyList<string>> accountsSource = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly object diagnosticsLock = new();
         private readonly List<string> diagnostics = [];
-        private Action? startApi;
-
-        public void SetStartApi(Action startApiAction)
-        {
-            startApi = startApiAction;
-        }
 
         public override void connectAck()
         {
             AddDiagnostic("connectAck received");
-            startApi?.Invoke();
         }
 
         public override void nextValidId(int orderId)
@@ -197,6 +196,13 @@ public sealed class IBKRReadOnlyHandshakeClient
         public override void error(int id, int errorCode, string errorMsg, string advancedOrderRejectJson)
         {
             AddDiagnostic($"error {errorCode}: {errorMsg}");
+        }
+
+        public void CaptureReaderError(Exception error)
+        {
+            AddDiagnostic($"reader error: {error.Message}");
+            handshakeSource.TrySetException(error);
+            accountsSource.TrySetException(error);
         }
 
         public Task WaitForHandshakeAsync(CancellationToken cancellationToken)
