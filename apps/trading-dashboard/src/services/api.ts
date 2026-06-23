@@ -66,6 +66,32 @@ export async function submitManualTrade(trade: TradingSignalRequest) {
   return response.json() as Promise<TradingSignal>
 }
 
+export async function lockTrading() {
+  return postSafetyAction('/api/safety/lock')
+}
+
+export async function emergencyStop() {
+  const response = await fetch(`${API_BASE_URL}/api/safety/emergency-stop`, {
+    method: 'POST',
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({}),
+  })
+
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status} from Trading Engine`)
+  }
+
+  const payload = await response.json() as { settings: RiskSettings; broker_result?: Record<string, unknown> }
+  return payload.settings
+}
+
+export async function resumeTrading() {
+  return postSafetyAction('/api/safety/resume')
+}
+
 export async function cancelWorkingOrders(symbol?: string) {
   return postBrokerAction('/api/broker/orders/cancel-working', { symbol })
 }
@@ -90,6 +116,23 @@ async function request<T>(path: string): Promise<T> {
   }
 
   return response.json() as Promise<T>
+}
+
+async function postSafetyAction(path: string): Promise<RiskSettings> {
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    method: 'POST',
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({}),
+  })
+
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status} from Trading Engine`)
+  }
+
+  return response.json() as Promise<RiskSettings>
 }
 
 async function postBrokerAction(path: string, body: Record<string, unknown>): Promise<PaperActionResult> {

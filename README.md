@@ -96,6 +96,16 @@ PUT /api/risk/settings
 
 The dashboard Settings tab can update these controls at runtime. The trading engine persists runtime risk settings locally in `services/trading-engine/storage/risk-settings.json`, which is intentionally ignored by Git.
 
+Safety control endpoints:
+
+```text
+POST /api/safety/lock
+POST /api/safety/emergency-stop
+POST /api/safety/resume
+```
+
+The dashboard safety banner exposes Lock, Emergency Stop, and Resume. Lock disables auto trading and rejects new WhatsApp/manual entries. Emergency Stop flattens paper positions, cancels working paper orders, disables auto trading, and keeps trading locked until Resume is confirmed.
+
 Realtime updates are available through SignalR:
 
 ```text

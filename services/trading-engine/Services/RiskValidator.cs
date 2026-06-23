@@ -16,6 +16,16 @@ public sealed class RiskValidator(RiskSettingsStore settingsStore)
             reasons.Add("Auto trading is disabled");
         }
 
+        if (settings.TradingLocked)
+        {
+            reasons.Add("Trading is locked");
+        }
+
+        if (settings.EmergencyStopActive)
+        {
+            reasons.Add("Emergency stop is active");
+        }
+
         if (settings.MaxContractsPerSignal <= 0)
         {
             reasons.Add("Risk setting MaxContractsPerSignal must be greater than zero");

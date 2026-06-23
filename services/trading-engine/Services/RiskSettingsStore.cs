@@ -88,7 +88,9 @@ public sealed class RiskSettingsStore
             EnableAutoTrading = settings.EnableAutoTrading,
             RejectDuplicateSignals = settings.RejectDuplicateSignals,
             DuplicateWindowSeconds = settings.DuplicateWindowSeconds,
-            AllowPositionStacking = settings.AllowPositionStacking
+            AllowPositionStacking = settings.AllowPositionStacking,
+            TradingLocked = settings.TradingLocked,
+            EmergencyStopActive = settings.EmergencyStopActive
         };
     }
 
@@ -123,7 +125,9 @@ public sealed class RiskSettingsStore
             EnableAutoTrading = settings.EnableAutoTrading,
             RejectDuplicateSignals = settings.RejectDuplicateSignals,
             DuplicateWindowSeconds = settings.DuplicateWindowSeconds,
-            AllowPositionStacking = settings.AllowPositionStacking
+            AllowPositionStacking = settings.AllowPositionStacking,
+            TradingLocked = settings.TradingLocked,
+            EmergencyStopActive = settings.EmergencyStopActive
         };
     }
 }

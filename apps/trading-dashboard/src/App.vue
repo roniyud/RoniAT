@@ -20,6 +20,7 @@ import CandlestickChart from './components/CandlestickChart.vue'
 import {
   cancelWorkingOrders,
   closePosition,
+  emergencyStop,
   flattenPaperAccount,
   getAuditLogs,
   getBrokerMode,
@@ -28,6 +29,8 @@ import {
   getPositions,
   getRiskSettings,
   getSignals,
+  lockTrading,
+  resumeTrading,
   submitManualTrade,
   updateRiskSettings,
 } from './services/api'
@@ -51,6 +54,7 @@ const isRefreshing = ref(false)
 const activeAction = ref('')
 const isSavingRisk = ref(false)
 const isSubmittingTrade = ref(false)
+const isSafetyActionRunning = ref(false)
 const riskSaveMessage = ref('')
 const tradeMessage = ref('')
 const selectedTimeframe = ref<Timeframe>('5m')
@@ -70,6 +74,18 @@ const cancelledOrderCount = computed(() => orders.value.filter((order) => order.
 const rejectedSignalCount = computed(() => signals.value.filter((signal) => signal.status === 'rejected_by_risk').length)
 const approvedSignalCount = computed(() => signals.value.length - rejectedSignalCount.value)
 const chartSymbol = computed(() => signals.value[0]?.symbol || positions.value[0]?.symbol || 'MNQ1!')
+const safetyStatus = computed(() => {
+  if (riskSettings.value?.emergency_stop_active) return 'Emergency Stop Active'
+  if (riskSettings.value?.trading_locked) return 'Trading Locked'
+  if (riskSettings.value?.enable_auto_trading) return 'Trading Enabled'
+  return 'Auto Trading Off'
+})
+const safetyStatusClass = computed(() => {
+  if (riskSettings.value?.emergency_stop_active) return 'emergency'
+  if (riskSettings.value?.trading_locked) return 'locked'
+  if (riskSettings.value?.enable_auto_trading) return 'enabled'
+  return 'paused'
+})
 const manualTrade = ref<TradingSignalRequest>({
   type: 'entry',
   direction: 'SHORT',
@@ -221,6 +237,40 @@ async function handleSubmitManualTrade() {
   }
 }
 
+async function handleLockTrading() {
+  if (!window.confirm('Lock trading and turn off auto trading?')) return
+
+  await runSafetyAction(() => lockTrading())
+}
+
+async function handleEmergencyStop() {
+  if (!window.confirm('Emergency Stop will close positions, cancel working orders, lock trading, and disable auto trading. Continue?')) return
+
+  await runSafetyAction(() => emergencyStop())
+}
+
+async function handleResumeTrading() {
+  if (!window.confirm('Resume trading and enable auto trading?')) return
+
+  await runSafetyAction(() => resumeTrading())
+}
+
+async function runSafetyAction(action: () => Promise<RiskSettings>) {
+  isSafetyActionRunning.value = true
+  errorMessage.value = ''
+
+  try {
+    const saved = await action()
+    riskSettings.value = saved
+    riskForm.value = { ...saved, allowed_symbols: [...saved.allowed_symbols] }
+    await refreshData()
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : 'Safety action failed'
+  } finally {
+    isSafetyActionRunning.value = false
+  }
+}
+
 function formatPrice(value: number | null | undefined) {
   if (value === null || value === undefined) return '-'
   return new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 }).format(value)
@@ -337,6 +387,42 @@ watch([chartSymbol, selectedTimeframe], () => {
       <span>{{ errorMessage }}</span>
     </section>
 
+    <section class="safety-strip" :class="safetyStatusClass">
+      <div>
+        <ShieldCheck :size="18" />
+        <strong>{{ safetyStatus }}</strong>
+      </div>
+      <div class="safety-actions">
+        <button
+          class="action-button secondary"
+          type="button"
+          :disabled="isSafetyActionRunning || riskSettings?.trading_locked"
+          @click="handleLockTrading"
+        >
+          <ShieldCheck :size="16" />
+          <span>Lock</span>
+        </button>
+        <button
+          class="action-button danger"
+          type="button"
+          :disabled="isSafetyActionRunning"
+          @click="handleEmergencyStop"
+        >
+          <AlertTriangle :size="16" />
+          <span>Emergency Stop</span>
+        </button>
+        <button
+          class="action-button secondary"
+          type="button"
+          :disabled="isSafetyActionRunning || (!riskSettings?.trading_locked && riskSettings?.enable_auto_trading && !riskSettings?.emergency_stop_active)"
+          @click="handleResumeTrading"
+        >
+          <CheckCircle2 :size="16" />
+          <span>Resume</span>
+        </button>
+      </div>
+    </section>
+
     <section class="metrics-grid" aria-label="Trading overview">
       <article class="metric-tile">
         <ListChecks :size="20" />
@@ -363,7 +449,7 @@ watch([chartSymbol, selectedTimeframe], () => {
         <ShieldCheck :size="20" />
         <div>
           <span>Auto Trading</span>
-          <strong>{{ riskSettings?.enable_auto_trading ? 'On' : 'Off' }}</strong>
+          <strong>{{ riskSettings?.enable_auto_trading && !riskSettings?.trading_locked ? 'On' : 'Off' }}</strong>
         </div>
       </article>
       <article class="metric-tile">
@@ -428,7 +514,7 @@ watch([chartSymbol, selectedTimeframe], () => {
         <div class="panel-header">
           <div>
             <h2>Manual Trade</h2>
-            <p class="panel-subtitle">Broker {{ brokerMode }} / Risk {{ riskSettings?.enable_auto_trading ? 'Auto On' : 'Auto Off' }}</p>
+            <p class="panel-subtitle">Broker {{ brokerMode }} / {{ safetyStatus }}</p>
           </div>
           <span class="status-pill" :class="brokerMode.toLowerCase()">{{ brokerMode }}</span>
         </div>
@@ -480,7 +566,11 @@ watch([chartSymbol, selectedTimeframe], () => {
 
           <div class="settings-actions">
             <span class="save-message">{{ tradeMessage }}</span>
-            <button class="action-button secondary" type="submit" :disabled="isSubmittingTrade">
+            <button
+              class="action-button secondary"
+              type="submit"
+              :disabled="isSubmittingTrade || Boolean(riskSettings?.trading_locked) || Boolean(riskSettings?.emergency_stop_active) || !riskSettings?.enable_auto_trading"
+            >
               <Send :size="16" />
               <span>{{ isSubmittingTrade ? 'Submitting' : 'Submit Trade' }}</span>
             </button>
@@ -710,6 +800,22 @@ watch([chartSymbol, selectedTimeframe], () => {
               <small>{{ riskForm.allow_position_stacking ? 'Enabled' : 'Blocked' }}</small>
             </span>
             <input v-model="riskForm.allow_position_stacking" type="checkbox" />
+          </label>
+
+          <label class="toggle-row">
+            <span>
+              <strong>Trading Lock</strong>
+              <small>{{ riskForm.trading_locked ? 'Locked' : 'Unlocked' }}</small>
+            </span>
+            <input v-model="riskForm.trading_locked" type="checkbox" />
+          </label>
+
+          <label class="toggle-row">
+            <span>
+              <strong>Emergency Stop Active</strong>
+              <small>{{ riskForm.emergency_stop_active ? 'Active' : 'Inactive' }}</small>
+            </span>
+            <input v-model="riskForm.emergency_stop_active" type="checkbox" />
           </label>
 
           <div class="settings-grid">

@@ -153,6 +153,68 @@ h2 {
   font-size: 14px;
 }
 
+.safety-strip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+  padding: 10px 12px;
+  border: 1px solid #dfe5e7;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.safety-strip > div:first-child {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.safety-strip strong {
+  color: #181a1b;
+  font-size: 14px;
+}
+
+.safety-strip.enabled {
+  border-color: #b7ead4;
+  background: #f0fdf7;
+}
+
+.safety-strip.enabled svg {
+  color: #13795b;
+}
+
+.safety-strip.paused,
+.safety-strip.locked {
+  border-color: #eadb9f;
+  background: #fff8d6;
+}
+
+.safety-strip.paused svg,
+.safety-strip.locked svg {
+  color: #8a6d1f;
+}
+
+.safety-strip.emergency {
+  border-color: #f1bbbb;
+  background: #fff4f2;
+}
+
+.safety-strip.emergency svg,
+.safety-strip.emergency strong {
+  color: #9f1d1d;
+}
+
+.safety-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
 .metrics-grid {
   display: grid;
   grid-template-columns: repeat(6, minmax(0, 1fr));
@@ -519,10 +581,18 @@ tr:last-child td {
 
 .status-pill.risk-rejected,
 .status-pill.risk-settings-updated,
-.status-pill.manual-trade-submitted {
+.status-pill.manual-trade-submitted,
+.status-pill.safety-trading-locked,
+.status-pill.safety-trading-resumed {
   color: #8a6d1f;
   border-color: #eadb9f;
   background: #fff8d6;
+}
+
+.status-pill.safety-emergency-stop {
+  color: #9f1d1d;
+  border-color: #f1bbbb;
+  background: #fde2e2;
 }
 
 .status-pill.paper-action,
@@ -752,6 +822,16 @@ tr:last-child td {
     padding: 12px;
   }
 
+  .safety-strip {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .safety-actions {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
   .metric-tile strong {
     font-size: 20px;
   }
@@ -862,6 +942,10 @@ tr:last-child td {
   .settings-actions {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .safety-actions {
+    grid-template-columns: 1fr;
   }
 
   .chart-footer {

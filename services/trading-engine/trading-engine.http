@@ -86,8 +86,31 @@ Content-Type: application/json
   "enable_auto_trading": true,
   "reject_duplicate_signals": true,
   "duplicate_window_seconds": 120,
-  "allow_position_stacking": false
+  "allow_position_stacking": false,
+  "trading_locked": false,
+  "emergency_stop_active": false
 }
+
+###
+
+POST {{trading_engine_HostAddress}}/api/safety/lock
+Content-Type: application/json
+
+{}
+
+###
+
+POST {{trading_engine_HostAddress}}/api/safety/emergency-stop
+Content-Type: application/json
+
+{}
+
+###
+
+POST {{trading_engine_HostAddress}}/api/safety/resume
+Content-Type: application/json
+
+{}
 
 ###
 

@@ -204,7 +204,9 @@ app.MapPut("/api/risk/settings", async (RiskSettingsUpdateRequest request, RiskS
         EnableAutoTrading = request.EnableAutoTrading,
         RejectDuplicateSignals = request.RejectDuplicateSignals,
         DuplicateWindowSeconds = request.DuplicateWindowSeconds,
-        AllowPositionStacking = request.AllowPositionStacking
+        AllowPositionStacking = request.AllowPositionStacking,
+        TradingLocked = request.TradingLocked,
+        EmergencyStopActive = request.EmergencyStopActive
     });
 
     if (!result.Ok)
@@ -220,6 +222,62 @@ app.MapPut("/api/risk/settings", async (RiskSettingsUpdateRequest request, RiskS
     return Results.Ok(RiskSettingsResponse.FromSettings(result.Settings));
 })
 .WithName("UpdateRiskSettings")
+.WithOpenApi();
+
+app.MapPost("/api/safety/lock", async (RiskSettingsStore settingsStore, TradingDbContext db, IHubContext<TradingHub> hub) =>
+{
+    var current = settingsStore.Get();
+    current.EnableAutoTrading = false;
+    current.TradingLocked = true;
+
+    var result = settingsStore.Update(current);
+    db.AuditLogs.Add(AuditLogRecord.SafetyAction("safety.trading_locked", result.Settings));
+    await db.SaveChangesAsync();
+    await BroadcastTradingUpdateAsync(hub, "safety.trading_locked", null);
+
+    return Results.Ok(RiskSettingsResponse.FromSettings(result.Settings));
+})
+.WithName("LockTrading")
+.WithOpenApi();
+
+app.MapPost("/api/safety/emergency-stop", async (RiskSettingsStore settingsStore, TradingDbContext db, IBrokerAdapter brokerAdapter, IHubContext<TradingHub> hub) =>
+{
+    var brokerResult = await brokerAdapter.FlattenAsync(db);
+
+    var current = settingsStore.Get();
+    current.EnableAutoTrading = false;
+    current.TradingLocked = true;
+    current.EmergencyStopActive = true;
+
+    var result = settingsStore.Update(current);
+    db.AuditLogs.Add(AuditLogRecord.SafetyAction("safety.emergency_stop", result.Settings, brokerResult));
+    await db.SaveChangesAsync();
+    await BroadcastTradingUpdateAsync(hub, "safety.emergency_stop", null);
+
+    return Results.Ok(new
+    {
+        settings = RiskSettingsResponse.FromSettings(result.Settings),
+        broker_result = brokerResult
+    });
+})
+.WithName("EmergencyStop")
+.WithOpenApi();
+
+app.MapPost("/api/safety/resume", async (RiskSettingsStore settingsStore, TradingDbContext db, IHubContext<TradingHub> hub) =>
+{
+    var current = settingsStore.Get();
+    current.EnableAutoTrading = true;
+    current.TradingLocked = false;
+    current.EmergencyStopActive = false;
+
+    var result = settingsStore.Update(current);
+    db.AuditLogs.Add(AuditLogRecord.SafetyAction("safety.trading_resumed", result.Settings));
+    await db.SaveChangesAsync();
+    await BroadcastTradingUpdateAsync(hub, "safety.trading_resumed", null);
+
+    return Results.Ok(RiskSettingsResponse.FromSettings(result.Settings));
+})
+.WithName("ResumeTrading")
 .WithOpenApi();
 
 app.MapPost("/api/broker/orders/cancel-working", async (SymbolActionRequest request, TradingDbContext db, IBrokerAdapter brokerAdapter, IHubContext<TradingHub> hub) =>

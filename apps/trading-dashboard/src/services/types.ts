@@ -69,6 +69,8 @@ export type RiskSettings = {
   reject_duplicate_signals: boolean
   duplicate_window_seconds: number
   allow_position_stacking: boolean
+  trading_locked: boolean
+  emergency_stop_active: boolean
 }
 
 export type AuditLogRecord = {

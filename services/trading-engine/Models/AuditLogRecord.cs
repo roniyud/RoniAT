@@ -54,7 +54,21 @@ public sealed class AuditLogRecord
         return new AuditLogRecord
         {
             Action = "risk.settings_updated",
-            Details = $"Risk settings updated: auto={settings.EnableAutoTrading}, maxContracts={settings.MaxContractsPerSignal}, symbols={string.Join(",", settings.AllowedSymbols)}",
+            Details = $"Risk settings updated: auto={settings.EnableAutoTrading}, locked={settings.TradingLocked}, emergency={settings.EmergencyStopActive}, maxContracts={settings.MaxContractsPerSignal}, symbols={string.Join(",", settings.AllowedSymbols)}",
+            CreatedAt = DateTimeOffset.UtcNow
+        };
+    }
+
+    public static AuditLogRecord SafetyAction(string action, RiskSettings settings, BrokerActionResult? brokerResult = null)
+    {
+        var brokerDetails = brokerResult is null
+            ? ""
+            : $", closedPositions={brokerResult.ClosedPositions}, cancelledOrders={brokerResult.CancelledOrders}";
+
+        return new AuditLogRecord
+        {
+            Action = action,
+            Details = $"Safety action: auto={settings.EnableAutoTrading}, locked={settings.TradingLocked}, emergency={settings.EmergencyStopActive}{brokerDetails}",
             CreatedAt = DateTimeOffset.UtcNow
         };
     }

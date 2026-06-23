@@ -8,4 +8,6 @@ public sealed class RiskSettings
     public bool RejectDuplicateSignals { get; set; } = true;
     public int DuplicateWindowSeconds { get; set; } = 120;
     public bool AllowPositionStacking { get; set; } = false;
+    public bool TradingLocked { get; set; } = false;
+    public bool EmergencyStopActive { get; set; } = false;
 }
