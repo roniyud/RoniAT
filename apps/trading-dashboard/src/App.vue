@@ -201,7 +201,7 @@ const chartTradeBlockedReason = computed(() => {
   if (riskSettings.value?.emergency_stop_active) return 'Emergency stop is active'
   if (riskSettings.value?.trading_locked) return 'Trading is locked'
   if (!riskSettings.value?.enable_auto_trading) return 'Auto trading is off'
-  if (brokerStatus.value?.read_only) return 'Broker is read-only'
+  if (brokerStatus.value?.read_only) return 'RoniAT order lock is on'
   if (latestChartPrice.value == null) return 'Waiting for chart price'
   return ''
 })
@@ -1155,7 +1155,7 @@ watch(activeTab, (tab) => {
               <span v-if="brokerTestResult" class="status-pill" :class="brokerTestResult.account_verified ? 'paper-position-opened' : 'rejected-by-risk'">
                 {{ brokerTestResult.account_verified ? 'Account Verified' : 'Account Missing' }}
               </span>
-              <span v-if="brokerStatus?.read_only" class="status-pill risk-settings-updated">Read Only</span>
+              <span v-if="brokerStatus?.read_only" class="status-pill risk-settings-updated">RoniAT Order Lock</span>
             </div>
           </div>
 
@@ -1241,6 +1241,14 @@ watch(activeTab, (tab) => {
               <small>{{ brokerForm.ibkr_paper.enabled ? 'Enabled' : 'Disabled' }}</small>
             </span>
             <input v-model="brokerForm.ibkr_paper.enabled" type="checkbox" />
+          </label>
+
+          <label class="toggle-row">
+            <span>
+              <strong>RoniAT Paper Order Lock</strong>
+              <small>{{ brokerForm.ibkr_paper.read_only ? 'Blocks order placement from RoniAT' : 'RoniAT can send Paper orders' }}</small>
+            </span>
+            <input v-model="brokerForm.ibkr_paper.read_only" type="checkbox" />
           </label>
 
           <label class="toggle-row">
