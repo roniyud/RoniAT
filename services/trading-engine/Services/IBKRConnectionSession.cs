@@ -747,9 +747,11 @@ public sealed class IBKRConnectionSession(
                 return;
             }
 
+            var averagePrice = NormalizeAveragePrice(contract, Convert.ToDecimal(avgCost));
+
             lock (positionsLock)
             {
-                positions.Add(new IBKRPositionSnapshot(symbol, pos, Convert.ToDecimal(avgCost)));
+                positions.Add(new IBKRPositionSnapshot(symbol, pos, averagePrice));
             }
         }
 
@@ -1082,6 +1084,26 @@ public sealed class IBKRConnectionSession(
             if (!string.IsNullOrWhiteSpace(contract.LocalSymbol)) return contract.LocalSymbol.Trim();
             if (!string.IsNullOrWhiteSpace(contract.Symbol)) return contract.Symbol.Trim();
             return "";
+        }
+
+        private static decimal NormalizeAveragePrice(Contract contract, decimal averageCost)
+        {
+            if (!contract.SecType.Equals("FUT", StringComparison.OrdinalIgnoreCase)
+                || string.IsNullOrWhiteSpace(contract.Symbol))
+            {
+                return averageCost;
+            }
+
+            var multiplier = contract.Symbol.Trim().ToUpperInvariant() switch
+            {
+                "MNQ" => 2m,
+                "NQ" => 20m,
+                "MES" => 5m,
+                "ES" => 50m,
+                _ => 1m
+            };
+
+            return multiplier <= 1m ? averageCost : decimal.Round(averageCost / multiplier, 2);
         }
 
         private static bool TryParseUnixTime(string value, out long unixTime)
