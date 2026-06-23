@@ -1,4 +1,4 @@
-import type { BrokerMode, OrderRecord, PaperActionResult, PositionRecord, RiskSettings, TradingSignal } from './types'
+import type { AuditLogRecord, BrokerMode, OrderRecord, PaperActionResult, PositionRecord, RiskSettings, TradingSignal } from './types'
 
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/+$/, '')
 
@@ -18,6 +18,10 @@ export async function getOrders() {
 export async function getPositions() {
   const positions = normalizeCollection<Record<string, unknown>>(await request<Record<string, unknown>[] | { value: Record<string, unknown>[] }>('/api/positions'))
   return positions.map(mapPosition)
+}
+
+export async function getAuditLogs() {
+  return normalizeCollection<AuditLogRecord>(await request<AuditLogRecord[] | { value: AuditLogRecord[] }>('/api/audit-logs'))
 }
 
 export async function getBrokerMode() {

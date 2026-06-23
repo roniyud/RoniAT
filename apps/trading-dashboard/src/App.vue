@@ -9,6 +9,7 @@ import {
   Clock3,
   ListChecks,
   RefreshCw,
+  ScrollText,
   Server,
   Settings2,
   ShieldCheck,
@@ -19,6 +20,7 @@ import {
   cancelWorkingOrders,
   closePosition,
   flattenPaperAccount,
+  getAuditLogs,
   getBrokerMode,
   getHealth,
   getOrders,
@@ -30,13 +32,14 @@ import {
 import { getCandles, type Timeframe } from './services/market-data'
 import type { CandlestickData } from 'lightweight-charts'
 import { createTradingRealtimeClient, type RealtimeStatus, type TradingUpdate } from './services/realtime'
-import type { ApiState, OrderRecord, PositionRecord, RiskSettings, TradingSignal } from './services/types'
+import type { ApiState, AuditLogRecord, OrderRecord, PositionRecord, RiskSettings, TradingSignal } from './services/types'
 
 const apiState = ref<ApiState>('loading')
-const activeTab = ref<'chart' | 'signals' | 'orders' | 'positions' | 'settings'>('chart')
+const activeTab = ref<'chart' | 'signals' | 'orders' | 'positions' | 'audit' | 'settings'>('chart')
 const signals = ref<TradingSignal[]>([])
 const orders = ref<OrderRecord[]>([])
 const positions = ref<PositionRecord[]>([])
+const auditLogs = ref<AuditLogRecord[]>([])
 const riskSettings = ref<RiskSettings | null>(null)
 const riskForm = ref<RiskSettings | null>(null)
 const brokerMode = ref('Paper')
@@ -70,10 +73,11 @@ async function refreshData() {
 
   try {
     await getHealth()
-    const [nextSignals, nextOrders, nextPositions, nextRiskSettings, nextBrokerMode] = await Promise.all([
+    const [nextSignals, nextOrders, nextPositions, nextAuditLogs, nextRiskSettings, nextBrokerMode] = await Promise.all([
       getSignals(),
       getOrders(),
       getPositions(),
+      getAuditLogs(),
       getRiskSettings(),
       getBrokerMode(),
     ])
@@ -81,6 +85,7 @@ async function refreshData() {
     signals.value = nextSignals
     orders.value = nextOrders
     positions.value = nextPositions
+    auditLogs.value = nextAuditLogs
     riskSettings.value = nextRiskSettings
     brokerMode.value = nextBrokerMode.mode
     if (!riskForm.value) {
@@ -207,6 +212,10 @@ function getStatusClass(status: string) {
   return status.replace(/[^a-z0-9]+/gi, '-').toLowerCase()
 }
 
+function getActionClass(action: string) {
+  return action.replace(/[^a-z0-9]+/gi, '-').toLowerCase()
+}
+
 const symbolsInput = computed({
   get() {
     return riskForm.value?.allowed_symbols.join(', ') || ''
@@ -317,6 +326,13 @@ watch([chartSymbol, selectedTimeframe], () => {
         </div>
       </article>
       <article class="metric-tile">
+        <ScrollText :size="20" />
+        <div>
+          <span>Audit Events</span>
+          <strong>{{ auditLogs.length }}</strong>
+        </div>
+      </article>
+      <article class="metric-tile">
         <Clock3 :size="20" />
         <div>
           <span>{{ lastRealtimeEvent ? lastRealtimeEvent.event_type : 'Updated' }}</span>
@@ -341,6 +357,10 @@ watch([chartSymbol, selectedTimeframe], () => {
       <button type="button" :class="{ active: activeTab === 'positions' }" @click="activeTab = 'positions'">
         <BriefcaseBusiness :size="18" />
         <span>Positions</span>
+      </button>
+      <button type="button" :class="{ active: activeTab === 'audit' }" @click="activeTab = 'audit'">
+        <ScrollText :size="18" />
+        <span>Audit</span>
       </button>
       <button type="button" :class="{ active: activeTab === 'settings' }" @click="activeTab = 'settings'">
         <Settings2 :size="18" />
@@ -522,6 +542,27 @@ watch([chartSymbol, selectedTimeframe], () => {
                 <span>{{ activeAction === `close-${position.symbol}` ? 'Closing' : 'Close Position' }}</span>
               </button>
             </div>
+          </article>
+        </div>
+      </div>
+
+      <div v-if="activeTab === 'audit'" class="data-panel">
+        <div class="panel-header">
+          <div>
+            <h2>Audit Log</h2>
+            <p class="panel-subtitle">Last {{ auditLogs.length }} engine events</p>
+          </div>
+          <span class="count-pill">{{ auditLogs.length }}</span>
+        </div>
+
+        <div v-if="auditLogs.length === 0" class="empty-state">No audit events</div>
+        <div v-else class="audit-list">
+          <article v-for="event in auditLogs" :key="event.id" class="audit-row">
+            <div>
+              <span class="status-pill audit-action" :class="getActionClass(event.action)">{{ event.action }}</span>
+              <strong>{{ event.details }}</strong>
+            </div>
+            <time>{{ formatDateTime(event.created_at) }}</time>
           </article>
         </div>
       </div>

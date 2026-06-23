@@ -41,6 +41,11 @@ Accept: application/json
 
 ###
 
+GET {{trading_engine_HostAddress}}/api/audit-logs
+Accept: application/json
+
+###
+
 GET {{trading_engine_HostAddress}}/api/market-data/candles?symbol=MNQ1!&timeframe=5m
 Accept: application/json
 

@@ -155,7 +155,7 @@ h2 {
 
 .metrics-grid {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 10px;
   margin-bottom: 14px;
 }
@@ -516,6 +516,20 @@ tr:last-child td {
   background: #fde2e2;
 }
 
+.status-pill.risk-rejected,
+.status-pill.risk-settings-updated {
+  color: #8a6d1f;
+  border-color: #eadb9f;
+  background: #fff8d6;
+}
+
+.status-pill.paper-action,
+.status-pill.paper-position-opened {
+  color: #2f5961;
+  border-color: #bddde3;
+  background: #e8f6f8;
+}
+
 .empty-state {
   display: grid;
   min-height: 220px;
@@ -557,6 +571,46 @@ tr:last-child td {
   align-items: center;
   justify-content: flex-end;
   gap: 8px;
+}
+
+.audit-list {
+  display: grid;
+}
+
+.audit-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: center;
+  padding: 13px 16px;
+  border-bottom: 1px solid #edf0f2;
+}
+
+.audit-row:last-child {
+  border-bottom: 0;
+}
+
+.audit-row > div {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+}
+
+.audit-row strong {
+  color: #181a1b;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.audit-row time {
+  color: #667085;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.audit-action {
+  justify-self: start;
+  min-width: 0;
 }
 
 .settings-panel {
@@ -667,7 +721,7 @@ tr:last-child td {
     left: 10px;
     z-index: 10;
     display: grid;
-    grid-template-columns: repeat(5, minmax(0, 1fr));
+    grid-template-columns: repeat(6, minmax(0, 1fr));
     gap: 4px;
     margin: 0;
     padding: 6px;
@@ -682,7 +736,7 @@ tr:last-child td {
     height: 46px;
     border: 0;
     border-radius: 6px;
-    font-size: 12px;
+    font-size: 11px;
   }
 
   .tabbar button.active {
@@ -695,6 +749,10 @@ tr:last-child td {
 
   .position-actions {
     justify-content: flex-start;
+  }
+
+  .audit-row {
+    grid-template-columns: 1fr;
   }
 
   .settings-panel {

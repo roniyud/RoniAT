@@ -67,6 +67,14 @@ POST /api/broker/positions/close
 POST /api/broker/flatten
 ```
 
+Audit log endpoint:
+
+```text
+GET /api/audit-logs
+```
+
+The dashboard Audit tab shows recent risk, signal, and paper broker events so rejected signals and manual actions can be traced from the UI.
+
 The current configured broker mode is `Paper`, backed by `PaperBrokerAdapter`. Legacy `/api/paper/...` aliases are still available during development.
 
 Risk validation runs before any signal reaches the broker adapter. Current defaults allow only `MNQ1!`, up to 7 contracts per signal, reject duplicate signals inside a short window, and reject new entries while an open position already exists for the same symbol. Rejected signals are still saved with status `rejected_by_risk`, but no broker orders are created.

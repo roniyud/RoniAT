@@ -59,3 +59,10 @@ export type RiskSettings = {
   duplicate_window_seconds: number
   allow_position_stacking: boolean
 }
+
+export type AuditLogRecord = {
+  id: number
+  action: string
+  details: string
+  created_at: string
+}

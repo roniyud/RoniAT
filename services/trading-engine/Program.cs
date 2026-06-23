@@ -184,6 +184,19 @@ app.MapGet("/api/positions", async (TradingDbContext db) =>
 .WithName("GetPositions")
 .WithOpenApi();
 
+app.MapGet("/api/audit-logs", async (TradingDbContext db) =>
+{
+    var auditLogs = await db.AuditLogs
+        .OrderByDescending(audit => audit.Id)
+        .Take(200)
+        .Select(audit => AuditLogResponse.FromRecord(audit))
+        .ToListAsync();
+
+    return Results.Ok(auditLogs);
+})
+.WithName("GetAuditLogs")
+.WithOpenApi();
+
 app.MapGet("/api/market-data/candles", (string? symbol, string? timeframe, IMarketDataProvider marketDataProvider) =>
 {
     try
