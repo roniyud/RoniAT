@@ -400,10 +400,16 @@ public sealed class IBKRConnectionSession(
         using var scope = scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<TradingDbContext>();
         var existing = await db.Positions.ToListAsync(cancellationToken);
+        var systemOwnedSymbols = await db.Orders
+            .Select(order => order.Symbol)
+            .Distinct()
+            .ToListAsync(cancellationToken);
+        var systemOwnedSymbolSet = systemOwnedSymbols.ToHashSet(StringComparer.OrdinalIgnoreCase);
         var now = DateTimeOffset.UtcNow;
         var changed = false;
 
         var activeSymbols = ibkrPositions
+            .Where(position => systemOwnedSymbolSet.Contains(position.Symbol))
             .Select(position => position.Symbol)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
@@ -415,6 +421,11 @@ public sealed class IBKRConnectionSession(
 
         foreach (var ibkrPosition in ibkrPositions)
         {
+            if (!systemOwnedSymbolSet.Contains(ibkrPosition.Symbol))
+            {
+                continue;
+            }
+
             var quantity = (int)Math.Abs(decimal.ToInt32(decimal.Round(ibkrPosition.Quantity, 0, MidpointRounding.AwayFromZero)));
             if (quantity == 0)
             {
@@ -465,7 +476,7 @@ public sealed class IBKRConnectionSession(
 
         db.AuditLogs.Add(AuditLogRecord.BrokerAction(
             "ibkr.positions_synced",
-            $"IBKR positions synced: {ibkrPositions.Count} open positions"));
+            $"IBKR positions synced: {activeSymbols.Count} system-owned open positions from {ibkrPositions.Count} account positions"));
         await db.SaveChangesAsync(cancellationToken);
         await hub.Clients.All.SendAsync("trading.updated", new
         {

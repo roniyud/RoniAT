@@ -109,6 +109,8 @@ The IBKR session opens a persistent IBKR API socket through the local official C
 
 When runtime broker mode is `IBKR` and the active IBKR environment is enabled, the trading engine keeps the IBKR session open. If the session is not connected, or the active settings change, it retries connection every 10 seconds, updates broker status, broadcasts dashboard refresh events, and writes audit events only when the connection transitions between connected and disconnected states.
 
+The dashboard intentionally shows only orders and positions owned by this system. External IBKR account positions are read during sync but are not persisted into the main dashboard position list unless they match a symbol with a local RoniAT order record.
+
 IBKR skeleton settings:
 
 ```json
