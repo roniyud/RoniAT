@@ -22,6 +22,7 @@ public sealed record BrokerActionResult(int CancelledOrders, int ClosedPositions
 
 public sealed record BrokerStatus(
     string Mode,
+    string Environment,
     bool Configured,
     bool Enabled,
     bool Connected,

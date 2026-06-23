@@ -23,6 +23,7 @@ import {
   emergencyStop,
   flattenPaperAccount,
   getAuditLogs,
+  getBrokerSettings,
   getBrokerMode,
   getHealth,
   getOrders,
@@ -32,12 +33,13 @@ import {
   lockTrading,
   resumeTrading,
   submitManualTrade,
+  updateBrokerSettings,
   updateRiskSettings,
 } from './services/api'
 import { getCandles, type Timeframe } from './services/market-data'
 import type { CandlestickData } from 'lightweight-charts'
 import { createTradingRealtimeClient, type RealtimeStatus, type TradingUpdate } from './services/realtime'
-import type { ApiState, AuditLogRecord, BrokerMode, OrderRecord, PositionRecord, RiskSettings, TradingSignal, TradingSignalRequest } from './services/types'
+import type { ApiState, AuditLogRecord, BrokerMode, BrokerSettings, IBKRSettings, OrderRecord, PositionRecord, RiskSettings, TradingSignal, TradingSignalRequest } from './services/types'
 
 const apiState = ref<ApiState>('loading')
 const activeTab = ref<'chart' | 'trade' | 'signals' | 'orders' | 'positions' | 'audit' | 'settings'>('chart')
@@ -48,14 +50,18 @@ const auditLogs = ref<AuditLogRecord[]>([])
 const riskSettings = ref<RiskSettings | null>(null)
 const riskForm = ref<RiskSettings | null>(null)
 const brokerStatus = ref<BrokerMode | null>(null)
+const brokerSettings = ref<BrokerSettings | null>(null)
+const brokerForm = ref<BrokerSettings | null>(null)
 const lastUpdated = ref<Date | null>(null)
 const errorMessage = ref('')
 const isRefreshing = ref(false)
 const activeAction = ref('')
 const isSavingRisk = ref(false)
+const isSavingBroker = ref(false)
 const isSubmittingTrade = ref(false)
 const isSafetyActionRunning = ref(false)
 const riskSaveMessage = ref('')
+const brokerSaveMessage = ref('')
 const tradeMessage = ref('')
 const selectedTimeframe = ref<Timeframe>('5m')
 const chartCandles = ref<CandlestickData[]>([])
@@ -103,13 +109,14 @@ async function refreshData() {
 
   try {
     await getHealth()
-    const [nextSignals, nextOrders, nextPositions, nextAuditLogs, nextRiskSettings, nextBrokerMode] = await Promise.all([
+    const [nextSignals, nextOrders, nextPositions, nextAuditLogs, nextRiskSettings, nextBrokerMode, nextBrokerSettings] = await Promise.all([
       getSignals(),
       getOrders(),
       getPositions(),
       getAuditLogs(),
       getRiskSettings(),
       getBrokerMode(),
+      getBrokerSettings(),
     ])
 
     signals.value = nextSignals
@@ -118,8 +125,12 @@ async function refreshData() {
     auditLogs.value = nextAuditLogs
     riskSettings.value = nextRiskSettings
     brokerStatus.value = nextBrokerMode
+    brokerSettings.value = nextBrokerSettings
     if (!riskForm.value) {
       riskForm.value = { ...nextRiskSettings, allowed_symbols: [...nextRiskSettings.allowed_symbols] }
+    }
+    if (!brokerForm.value) {
+      brokerForm.value = cloneBrokerSettings(nextBrokerSettings)
     }
     lastUpdated.value = new Date()
     apiState.value = 'online'
@@ -207,6 +218,26 @@ async function handleSaveRiskSettings() {
     errorMessage.value = error instanceof Error ? error.message : 'Risk settings update failed'
   } finally {
     isSavingRisk.value = false
+  }
+}
+
+async function handleSaveBrokerSettings() {
+  if (!brokerForm.value) return
+
+  isSavingBroker.value = true
+  brokerSaveMessage.value = ''
+  errorMessage.value = ''
+
+  try {
+    const saved = await updateBrokerSettings(normalizeBrokerSettings(brokerForm.value))
+    brokerSettings.value = saved
+    brokerForm.value = cloneBrokerSettings(saved)
+    brokerSaveMessage.value = 'Broker settings saved'
+    await refreshData()
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : 'Broker settings update failed'
+  } finally {
+    isSavingBroker.value = false
   }
 }
 
@@ -322,6 +353,35 @@ function normalizeSymbols(value: string) {
     .split(',')
     .map((symbol) => symbol.trim().toUpperCase())
     .filter(Boolean)
+}
+
+function cloneBrokerSettings(settings: BrokerSettings): BrokerSettings {
+  return {
+    mode: settings.mode,
+    ibkr_environment: settings.ibkr_environment,
+    ibkr_paper: { ...settings.ibkr_paper },
+    ibkr_live: { ...settings.ibkr_live },
+  }
+}
+
+function normalizeBrokerSettings(settings: BrokerSettings): BrokerSettings {
+  return {
+    mode: settings.mode,
+    ibkr_environment: settings.ibkr_environment,
+    ibkr_paper: normalizeIBKRSettings(settings.ibkr_paper),
+    ibkr_live: normalizeIBKRSettings(settings.ibkr_live),
+  }
+}
+
+function normalizeIBKRSettings(settings: IBKRSettings): IBKRSettings {
+  return {
+    host: settings.host.trim() || '127.0.0.1',
+    port: Number(settings.port),
+    client_id: Number(settings.client_id),
+    account: settings.account.trim(),
+    enabled: settings.enabled,
+    read_only: settings.read_only,
+  }
 }
 
 onMounted(() => {
@@ -769,15 +829,15 @@ watch([chartSymbol, selectedTimeframe], () => {
       <div v-if="activeTab === 'settings'" class="data-panel settings-panel">
         <div class="panel-header">
           <div>
-            <h2>Risk Control</h2>
-            <p class="panel-subtitle">Broker {{ brokerStatus?.mode || 'Paper' }} / Symbols {{ riskSettings?.allowed_symbols.join(', ') || '-' }}</p>
+            <h2>Settings</h2>
+            <p class="panel-subtitle">Broker {{ brokerStatus?.mode || 'Paper' }} {{ brokerStatus?.environment || '' }} / Symbols {{ riskSettings?.allowed_symbols.join(', ') || '-' }}</p>
           </div>
           <span class="status-pill" :class="riskSettings?.enable_auto_trading ? 'paper-position-opened' : 'rejected-by-risk'">
             {{ riskSettings?.enable_auto_trading ? 'Auto On' : 'Auto Off' }}
           </span>
         </div>
 
-        <form v-if="riskForm" class="settings-form" @submit.prevent="handleSaveRiskSettings">
+        <form v-if="brokerForm" class="settings-form broker-settings-form" @submit.prevent="handleSaveBrokerSettings">
           <div class="broker-status-card">
             <div>
               <span>Broker Status</span>
@@ -795,6 +855,120 @@ watch([chartSymbol, selectedTimeframe], () => {
               </span>
               <span v-if="brokerStatus?.read_only" class="status-pill risk-settings-updated">Read Only</span>
             </div>
+          </div>
+
+          <div class="settings-section-title">
+            <h3>Broker Mode</h3>
+          </div>
+
+          <div class="side-control">
+            <button
+              type="button"
+              :class="{ active: brokerForm.mode === 'Paper' }"
+              @click="brokerForm.mode = 'Paper'"
+            >
+              PAPER
+            </button>
+            <button
+              type="button"
+              :class="{ active: brokerForm.mode === 'IBKR' }"
+              @click="brokerForm.mode = 'IBKR'"
+            >
+              IBKR
+            </button>
+          </div>
+
+          <div class="side-control">
+            <button
+              type="button"
+              :class="{ active: brokerForm.ibkr_environment === 'Paper' }"
+              @click="brokerForm.ibkr_environment = 'Paper'"
+            >
+              IBKR PAPER
+            </button>
+            <button
+              type="button"
+              :class="{ active: brokerForm.ibkr_environment === 'Live' }"
+              @click="brokerForm.ibkr_environment = 'Live'"
+            >
+              IBKR LIVE
+            </button>
+          </div>
+
+          <div class="settings-grid">
+            <label>
+              <span>Paper Gateway Host</span>
+              <input v-model="brokerForm.ibkr_paper.host" type="text" autocomplete="off" spellcheck="false" />
+            </label>
+            <label>
+              <span>Paper Gateway Port</span>
+              <input v-model.number="brokerForm.ibkr_paper.port" type="number" min="1" max="65535" />
+            </label>
+            <label>
+              <span>Paper Client ID</span>
+              <input v-model.number="brokerForm.ibkr_paper.client_id" type="number" min="1" />
+            </label>
+            <label>
+              <span>Paper Account</span>
+              <input v-model="brokerForm.ibkr_paper.account" type="text" autocomplete="off" spellcheck="false" />
+            </label>
+          </div>
+
+          <div class="settings-grid">
+            <label>
+              <span>Live Gateway Host</span>
+              <input v-model="brokerForm.ibkr_live.host" type="text" autocomplete="off" spellcheck="false" />
+            </label>
+            <label>
+              <span>Live Gateway Port</span>
+              <input v-model.number="brokerForm.ibkr_live.port" type="number" min="1" max="65535" />
+            </label>
+            <label>
+              <span>Live Client ID</span>
+              <input v-model.number="brokerForm.ibkr_live.client_id" type="number" min="1" />
+            </label>
+            <label>
+              <span>Live Account</span>
+              <input v-model="brokerForm.ibkr_live.account" type="text" autocomplete="off" spellcheck="false" />
+            </label>
+          </div>
+
+          <label class="toggle-row">
+            <span>
+              <strong>Enable IBKR Paper</strong>
+              <small>{{ brokerForm.ibkr_paper.enabled ? 'Enabled' : 'Disabled' }}</small>
+            </span>
+            <input v-model="brokerForm.ibkr_paper.enabled" type="checkbox" />
+          </label>
+
+          <label class="toggle-row">
+            <span>
+              <strong>Enable IBKR Live</strong>
+              <small>{{ brokerForm.ibkr_live.enabled ? 'Enabled' : 'Disabled' }}</small>
+            </span>
+            <input v-model="brokerForm.ibkr_live.enabled" type="checkbox" />
+          </label>
+
+          <label class="toggle-row">
+            <span>
+              <strong>Live Read Only</strong>
+              <small>{{ brokerForm.ibkr_live.read_only ? 'Read only' : 'Order capable later' }}</small>
+            </span>
+            <input v-model="brokerForm.ibkr_live.read_only" type="checkbox" />
+          </label>
+
+          <div class="settings-actions">
+            <span class="save-message">{{ brokerSaveMessage }}</span>
+            <button class="action-button secondary" type="submit" :disabled="isSavingBroker">
+              <Server :size="16" />
+              <span>{{ isSavingBroker ? 'Saving' : 'Save Broker Settings' }}</span>
+            </button>
+          </div>
+        </form>
+
+        <form v-if="riskForm" class="settings-form" @submit.prevent="handleSaveRiskSettings">
+          <div class="settings-section-title">
+            <h3>Risk Control</h3>
           </div>
 
           <label class="toggle-row">

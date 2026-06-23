@@ -55,19 +55,35 @@ builder.Services.PostConfigure<RiskSettings>(settings =>
 });
 builder.Services.AddSingleton<RiskSettingsStore>();
 builder.Services.AddScoped<RiskValidator>();
-builder.Services.Configure<IBKRSettings>(builder.Configuration.GetSection("IBKR"));
-builder.Services.AddScoped<PaperBrokerAdapter>();
-builder.Services.AddScoped<IBKRBrokerAdapter>();
-builder.Services.AddScoped<IBrokerAdapter>(serviceProvider =>
+builder.Services.Configure<BrokerSettings>(options =>
 {
-    var mode = builder.Configuration.GetValue<string>("Broker:Mode") ?? "Paper";
-    return mode.ToUpperInvariant() switch
+    options.Mode = builder.Configuration.GetValue<string>("Broker:Mode") ?? "Paper";
+
+    var ibkrSection = builder.Configuration.GetSection("IBKR");
+    options.IbkrPaper = new IBKRSettings
     {
-        "PAPER" => serviceProvider.GetRequiredService<PaperBrokerAdapter>(),
-        "IBKR" => serviceProvider.GetRequiredService<IBKRBrokerAdapter>(),
-        _ => throw new InvalidOperationException($"Unsupported broker mode: {mode}")
+        Host = ibkrSection.GetValue<string>("Paper:Host") ?? ibkrSection.GetValue<string>("Host") ?? "127.0.0.1",
+        Port = ibkrSection.GetValue<int?>("Paper:Port") ?? ibkrSection.GetValue<int?>("Port") ?? 4002,
+        ClientId = ibkrSection.GetValue<int?>("Paper:ClientId") ?? ibkrSection.GetValue<int?>("ClientId") ?? 10,
+        Account = ibkrSection.GetValue<string>("Paper:Account") ?? ibkrSection.GetValue<string>("Account") ?? "",
+        Enabled = ibkrSection.GetValue<bool?>("Paper:Enabled") ?? ibkrSection.GetValue<bool?>("Enabled") ?? false,
+        ReadOnly = ibkrSection.GetValue<bool?>("Paper:ReadOnly") ?? ibkrSection.GetValue<bool?>("ReadOnly") ?? true
+    };
+    options.IbkrLive = new IBKRSettings
+    {
+        Host = ibkrSection.GetValue<string>("Live:Host") ?? "127.0.0.1",
+        Port = ibkrSection.GetValue<int?>("Live:Port") ?? 4001,
+        ClientId = ibkrSection.GetValue<int?>("Live:ClientId") ?? 11,
+        Account = ibkrSection.GetValue<string>("Live:Account") ?? "",
+        Enabled = ibkrSection.GetValue<bool?>("Live:Enabled") ?? false,
+        ReadOnly = ibkrSection.GetValue<bool?>("Live:ReadOnly") ?? true
     };
 });
+builder.Services.AddSingleton<BrokerSettingsStore>();
+builder.Services.AddScoped<PaperBrokerAdapter>();
+builder.Services.AddScoped<IBKRBrokerAdapter>();
+builder.Services.AddScoped<BrokerRouterAdapter>();
+builder.Services.AddScoped<IBrokerAdapter>(serviceProvider => serviceProvider.GetRequiredService<BrokerRouterAdapter>());
 builder.Services.AddSingleton<IMarketDataProvider, MockMarketDataProvider>();
 
 var app = builder.Build();
@@ -191,6 +207,56 @@ app.MapGet("/api/market-data/candles", (string? symbol, string? timeframe, IMark
 
 app.MapGet("/api/broker", (IBrokerAdapter brokerAdapter) => Results.Ok(BrokerStatusResponse.FromStatus(brokerAdapter.GetStatus())))
 .WithName("GetBrokerMode")
+.WithOpenApi();
+
+app.MapGet("/api/broker/settings", (BrokerSettingsStore settingsStore) =>
+{
+    return Results.Ok(BrokerSettingsResponse.FromSettings(settingsStore.Get()));
+})
+.WithName("GetBrokerSettings")
+.WithOpenApi();
+
+app.MapPut("/api/broker/settings", async (BrokerSettingsUpdateRequest request, BrokerSettingsStore settingsStore, TradingDbContext db, IHubContext<TradingHub> hub) =>
+{
+    var result = settingsStore.Update(new BrokerSettings
+    {
+        Mode = request.Mode,
+        IbkrEnvironment = request.IbkrEnvironment,
+        IbkrPaper = new IBKRSettings
+        {
+            Host = request.IbkrPaper.Host,
+            Port = request.IbkrPaper.Port,
+            ClientId = request.IbkrPaper.ClientId,
+            Account = request.IbkrPaper.Account,
+            Enabled = request.IbkrPaper.Enabled,
+            ReadOnly = request.IbkrPaper.ReadOnly
+        },
+        IbkrLive = new IBKRSettings
+        {
+            Host = request.IbkrLive.Host,
+            Port = request.IbkrLive.Port,
+            ClientId = request.IbkrLive.ClientId,
+            Account = request.IbkrLive.Account,
+            Enabled = request.IbkrLive.Enabled,
+            ReadOnly = request.IbkrLive.ReadOnly
+        }
+    });
+
+    if (!result.Ok)
+    {
+        return Results.BadRequest(new ValidationErrorResponse(result.Errors));
+    }
+
+    db.AuditLogs.Add(AuditLogRecord.BrokerAction(
+        "broker.settings_updated",
+        $"Broker settings updated: mode={result.Settings.Mode}, ibkrEnvironment={result.Settings.IbkrEnvironment}"));
+    await db.SaveChangesAsync();
+
+    await BroadcastTradingUpdateAsync(hub, "broker.settings_updated", null);
+
+    return Results.Ok(BrokerSettingsResponse.FromSettings(result.Settings));
+})
+.WithName("UpdateBrokerSettings")
 .WithOpenApi();
 
 app.MapGet("/api/risk/settings", (RiskSettingsStore settingsStore) =>

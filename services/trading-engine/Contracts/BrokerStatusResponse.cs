@@ -5,6 +5,7 @@ namespace RoniAT.TradingEngine.Contracts;
 
 public sealed record BrokerStatusResponse(
     [property: JsonPropertyName("mode")] string Mode,
+    [property: JsonPropertyName("environment")] string Environment,
     [property: JsonPropertyName("configured")] bool Configured,
     [property: JsonPropertyName("enabled")] bool Enabled,
     [property: JsonPropertyName("connected")] bool Connected,
@@ -16,6 +17,7 @@ public sealed record BrokerStatusResponse(
     {
         return new BrokerStatusResponse(
             status.Mode,
+            status.Environment,
             status.Configured,
             status.Enabled,
             status.Connected,

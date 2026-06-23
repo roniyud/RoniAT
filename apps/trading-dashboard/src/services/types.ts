@@ -60,11 +60,28 @@ export type PaperActionResult = {
 
 export type BrokerMode = {
   mode: string
+  environment: string
   configured: boolean
   enabled: boolean
   connected: boolean
   read_only: boolean
   message: string
+}
+
+export type IBKRSettings = {
+  host: string
+  port: number
+  client_id: number
+  account: string
+  enabled: boolean
+  read_only: boolean
+}
+
+export type BrokerSettings = {
+  mode: 'Paper' | 'IBKR'
+  ibkr_environment: 'Paper' | 'Live'
+  ibkr_paper: IBKRSettings
+  ibkr_live: IBKRSettings
 }
 
 export type RiskSettings = {

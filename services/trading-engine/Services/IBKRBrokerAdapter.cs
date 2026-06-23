@@ -1,27 +1,27 @@
-using Microsoft.Extensions.Options;
 using RoniAT.TradingEngine.Data;
 using RoniAT.TradingEngine.Models;
 
 namespace RoniAT.TradingEngine.Services;
 
-public sealed class IBKRBrokerAdapter(IOptions<IBKRSettings> options) : IBrokerAdapter
+public sealed class IBKRBrokerAdapter(BrokerSettingsStore settingsStore) : IBrokerAdapter
 {
-    private readonly IBKRSettings settings = options.Value;
-
     public string Name => "IBKR";
 
     public BrokerStatus GetStatus()
     {
+        var brokerSettings = settingsStore.Get();
+        var settings = settingsStore.GetActiveIBKRSettings();
         var configured = !string.IsNullOrWhiteSpace(settings.Host)
             && settings.Port > 0
             && !string.IsNullOrWhiteSpace(settings.Account);
 
         var message = configured
-            ? settings.Enabled ? "IBKR skeleton configured; live connection not implemented" : "IBKR configured but disabled"
-            : "IBKR not configured";
+            ? settings.Enabled ? $"IBKR {brokerSettings.IbkrEnvironment} skeleton configured; live connection not implemented" : $"IBKR {brokerSettings.IbkrEnvironment} configured but disabled"
+            : $"IBKR {brokerSettings.IbkrEnvironment} not configured";
 
         return new BrokerStatus(
             Mode: Name,
+            Environment: brokerSettings.IbkrEnvironment,
             Configured: configured,
             Enabled: settings.Enabled,
             Connected: false,

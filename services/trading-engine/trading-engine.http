@@ -72,6 +72,37 @@ Accept: application/json
 
 ###
 
+GET {{trading_engine_HostAddress}}/api/broker/settings
+Accept: application/json
+
+###
+
+PUT {{trading_engine_HostAddress}}/api/broker/settings
+Content-Type: application/json
+
+{
+  "mode": "Paper",
+  "ibkr_environment": "Paper",
+  "ibkr_paper": {
+    "host": "127.0.0.1",
+    "port": 4002,
+    "client_id": 10,
+    "account": "",
+    "enabled": false,
+    "read_only": true
+  },
+  "ibkr_live": {
+    "host": "127.0.0.1",
+    "port": 4001,
+    "client_id": 11,
+    "account": "",
+    "enabled": false,
+    "read_only": true
+  }
+}
+
+###
+
 GET {{trading_engine_HostAddress}}/api/risk/settings
 Accept: application/json
 

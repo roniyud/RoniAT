@@ -1,0 +1,48 @@
+using RoniAT.TradingEngine.Data;
+using RoniAT.TradingEngine.Models;
+
+namespace RoniAT.TradingEngine.Services;
+
+public sealed class BrokerRouterAdapter(
+    BrokerSettingsStore settingsStore,
+    PaperBrokerAdapter paperBrokerAdapter,
+    IBKRBrokerAdapter ibkrBrokerAdapter) : IBrokerAdapter
+{
+    public string Name => ActiveAdapter.Name;
+
+    public BrokerStatus GetStatus()
+    {
+        return ActiveAdapter.GetStatus();
+    }
+
+    public Task ApplyEntrySignalAsync(TradingSignalRecord signal, TradingDbContext db)
+    {
+        return ActiveAdapter.ApplyEntrySignalAsync(signal, db);
+    }
+
+    public Task<BrokerActionResult> CancelWorkingOrdersAsync(string? symbol, TradingDbContext db)
+    {
+        return ActiveAdapter.CancelWorkingOrdersAsync(symbol, db);
+    }
+
+    public Task<BrokerActionResult> ClosePositionAsync(string symbol, TradingDbContext db)
+    {
+        return ActiveAdapter.ClosePositionAsync(symbol, db);
+    }
+
+    public Task<BrokerActionResult> FlattenAsync(TradingDbContext db)
+    {
+        return ActiveAdapter.FlattenAsync(db);
+    }
+
+    private IBrokerAdapter ActiveAdapter
+    {
+        get
+        {
+            var settings = settingsStore.Get();
+            return settings.Mode.Equals("IBKR", StringComparison.OrdinalIgnoreCase)
+                ? ibkrBrokerAdapter
+                : paperBrokerAdapter;
+        }
+    }
+}

@@ -12,6 +12,7 @@ public sealed class PaperBrokerAdapter : IBrokerAdapter
     {
         return new BrokerStatus(
             Mode: Name,
+            Environment: "Paper",
             Configured: true,
             Enabled: true,
             Connected: true,

@@ -93,18 +93,37 @@ Broker modes:
 }
 ```
 
-Supported values are `Paper` and `IBKR`. `IBKR` is currently a skeleton adapter only: it reports configuration status, writes audit/broker events, and blocks live order actions with `broker_blocked` status. It does not connect to TWS/Gateway or place live orders yet.
+Supported values are `Paper` and `IBKR`. Runtime broker settings can be changed from the dashboard Settings tab and are persisted locally in `services/trading-engine/storage/broker-settings.json`.
+
+Broker settings endpoints:
+
+```text
+GET /api/broker/settings
+PUT /api/broker/settings
+```
+
+`IBKR` is currently a skeleton adapter only: it reports configuration status, writes audit/broker events, and blocks live order actions with `broker_blocked` status. It does not connect to TWS/Gateway or place live orders yet.
 
 IBKR skeleton settings:
 
 ```json
 "IBKR": {
-  "Host": "127.0.0.1",
-  "Port": 7497,
-  "ClientId": 10,
-  "Account": "",
-  "Enabled": false,
-  "ReadOnly": true
+  "Paper": {
+    "Host": "127.0.0.1",
+    "Port": 4002,
+    "ClientId": 10,
+    "Account": "",
+    "Enabled": false,
+    "ReadOnly": true
+  },
+  "Live": {
+    "Host": "127.0.0.1",
+    "Port": 4001,
+    "ClientId": 11,
+    "Account": "",
+    "Enabled": false,
+    "ReadOnly": true
+  }
 }
 ```
 
