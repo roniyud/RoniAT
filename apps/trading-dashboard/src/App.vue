@@ -74,6 +74,8 @@ const isChartLoading = ref(false)
 const realtimeStatus = ref<RealtimeStatus>('disconnected')
 const lastRealtimeEvent = ref<TradingUpdate | null>(null)
 let refreshTimer: number | undefined
+let chartRefreshTimer: number | undefined
+let isChartRefreshInFlight = false
 let realtimeClient: ReturnType<typeof createTradingRealtimeClient> | undefined
 
 const totalOpenQuantity = computed(() => positions.value.reduce((total, position) => total + Math.abs(position.quantity), 0))
@@ -220,8 +222,13 @@ async function refreshData() {
   }
 }
 
-async function refreshCandles() {
-  isChartLoading.value = true
+async function refreshCandles(showLoading = true) {
+  if (isChartRefreshInFlight) return
+
+  isChartRefreshInFlight = true
+  if (showLoading) {
+    isChartLoading.value = true
+  }
   chartError.value = ''
 
   try {
@@ -229,8 +236,27 @@ async function refreshCandles() {
   } catch (error) {
     chartError.value = error instanceof Error ? error.message : 'Market data unavailable'
   } finally {
-    isChartLoading.value = false
+    isChartRefreshInFlight = false
+    if (showLoading) {
+      isChartLoading.value = false
+    }
   }
+}
+
+function getChartRefreshIntervalMs(timeframe: Timeframe) {
+  return timeframe === '1h' ? 30000 : 5000
+}
+
+function restartChartRefreshTimer() {
+  if (chartRefreshTimer) {
+    window.clearInterval(chartRefreshTimer)
+  }
+
+  chartRefreshTimer = window.setInterval(() => {
+    if (activeTab.value === 'chart') {
+      refreshCandles(false)
+    }
+  }, getChartRefreshIntervalMs(selectedTimeframe.value))
 }
 
 async function runAction(actionKey: string, confirmation: string, action: () => Promise<unknown>) {
@@ -489,10 +515,14 @@ onMounted(() => {
   refreshData()
   refreshCandles()
   refreshTimer = window.setInterval(refreshData, 5000)
+  restartChartRefreshTimer()
   realtimeClient = createTradingRealtimeClient(
     (update) => {
       lastRealtimeEvent.value = update
       refreshData()
+      if (activeTab.value === 'chart') {
+        refreshCandles(false)
+      }
     },
     (status) => {
       realtimeStatus.value = status
@@ -506,11 +536,19 @@ onMounted(() => {
 
 onUnmounted(() => {
   if (refreshTimer) window.clearInterval(refreshTimer)
+  if (chartRefreshTimer) window.clearInterval(chartRefreshTimer)
   realtimeClient?.stop()
 })
 
 watch([chartSymbol, selectedTimeframe], () => {
   refreshCandles()
+  restartChartRefreshTimer()
+})
+
+watch(activeTab, (tab) => {
+  if (tab === 'chart') {
+    refreshCandles(false)
+  }
 })
 </script>
 
