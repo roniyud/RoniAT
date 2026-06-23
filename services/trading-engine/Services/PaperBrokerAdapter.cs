@@ -8,6 +8,17 @@ public sealed class PaperBrokerAdapter : IBrokerAdapter
 {
     public string Name => "Paper";
 
+    public BrokerStatus GetStatus()
+    {
+        return new BrokerStatus(
+            Mode: Name,
+            Configured: true,
+            Enabled: true,
+            Connected: true,
+            ReadOnly: false,
+            Message: "Paper broker active");
+    }
+
     public async Task ApplyEntrySignalAsync(TradingSignalRecord signal, TradingDbContext db)
     {
         var now = DateTimeOffset.UtcNow;

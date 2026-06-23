@@ -579,6 +579,16 @@ tr:last-child td {
   background: #fde2e2;
 }
 
+.status-pill.broker-blocked,
+.status-pill.ibkr-entry-blocked,
+.status-pill.ibkr-cancel-orders-blocked,
+.status-pill.ibkr-close-position-blocked,
+.status-pill.ibkr-flatten-blocked {
+  color: #9f1d1d;
+  border-color: #f1bbbb;
+  background: #fde2e2;
+}
+
 .status-pill.risk-rejected,
 .status-pill.risk-settings-updated,
 .status-pill.manual-trade-submitted,
@@ -693,6 +703,37 @@ tr:last-child td {
   display: grid;
   gap: 16px;
   padding: 16px;
+}
+
+.broker-status-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: center;
+  padding: 12px 14px;
+  border: 1px solid #dfe5e7;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.broker-status-card span {
+  display: block;
+  color: #667085;
+  font-size: 12px;
+}
+
+.broker-status-card strong {
+  display: block;
+  margin-top: 4px;
+  color: #181a1b;
+  font-size: 13px;
+}
+
+.broker-status-flags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  justify-content: flex-end;
 }
 
 .side-control {
@@ -875,6 +916,14 @@ tr:last-child td {
 
   .audit-row {
     grid-template-columns: 1fr;
+  }
+
+  .broker-status-card {
+    grid-template-columns: 1fr;
+  }
+
+  .broker-status-flags {
+    justify-content: flex-start;
   }
 
   .settings-panel {

@@ -92,4 +92,14 @@ public sealed class AuditLogRecord
             CreatedAt = DateTimeOffset.UtcNow
         };
     }
+
+    public static AuditLogRecord BrokerAction(string action, string details)
+    {
+        return new AuditLogRecord
+        {
+            Action = action,
+            Details = details,
+            CreatedAt = DateTimeOffset.UtcNow
+        };
+    }
 }

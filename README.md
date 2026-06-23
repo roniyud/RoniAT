@@ -85,6 +85,29 @@ The dashboard Trade tab submits manual entries through the same validation, risk
 
 The current configured broker mode is `Paper`, backed by `PaperBrokerAdapter`. Legacy `/api/paper/...` aliases are still available during development.
 
+Broker modes:
+
+```json
+"Broker": {
+  "Mode": "Paper"
+}
+```
+
+Supported values are `Paper` and `IBKR`. `IBKR` is currently a skeleton adapter only: it reports configuration status, writes audit/broker events, and blocks live order actions with `broker_blocked` status. It does not connect to TWS/Gateway or place live orders yet.
+
+IBKR skeleton settings:
+
+```json
+"IBKR": {
+  "Host": "127.0.0.1",
+  "Port": 7497,
+  "ClientId": 10,
+  "Account": "",
+  "Enabled": false,
+  "ReadOnly": true
+}
+```
+
 Risk validation runs before any signal reaches the broker adapter. Current defaults allow only `MNQ1!`, up to 7 contracts per signal, reject duplicate signals inside a short window, and reject new entries while an open position already exists for the same symbol. Rejected signals are still saved with status `rejected_by_risk`, but no broker orders are created.
 
 Risk settings endpoint:

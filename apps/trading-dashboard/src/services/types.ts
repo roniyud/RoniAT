@@ -60,6 +60,11 @@ export type PaperActionResult = {
 
 export type BrokerMode = {
   mode: string
+  configured: boolean
+  enabled: boolean
+  connected: boolean
+  read_only: boolean
+  message: string
 }
 
 export type RiskSettings = {

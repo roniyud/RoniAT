@@ -37,7 +37,7 @@ import {
 import { getCandles, type Timeframe } from './services/market-data'
 import type { CandlestickData } from 'lightweight-charts'
 import { createTradingRealtimeClient, type RealtimeStatus, type TradingUpdate } from './services/realtime'
-import type { ApiState, AuditLogRecord, OrderRecord, PositionRecord, RiskSettings, TradingSignal, TradingSignalRequest } from './services/types'
+import type { ApiState, AuditLogRecord, BrokerMode, OrderRecord, PositionRecord, RiskSettings, TradingSignal, TradingSignalRequest } from './services/types'
 
 const apiState = ref<ApiState>('loading')
 const activeTab = ref<'chart' | 'trade' | 'signals' | 'orders' | 'positions' | 'audit' | 'settings'>('chart')
@@ -47,7 +47,7 @@ const positions = ref<PositionRecord[]>([])
 const auditLogs = ref<AuditLogRecord[]>([])
 const riskSettings = ref<RiskSettings | null>(null)
 const riskForm = ref<RiskSettings | null>(null)
-const brokerMode = ref('Paper')
+const brokerStatus = ref<BrokerMode | null>(null)
 const lastUpdated = ref<Date | null>(null)
 const errorMessage = ref('')
 const isRefreshing = ref(false)
@@ -117,7 +117,7 @@ async function refreshData() {
     positions.value = nextPositions
     auditLogs.value = nextAuditLogs
     riskSettings.value = nextRiskSettings
-    brokerMode.value = nextBrokerMode.mode
+    brokerStatus.value = nextBrokerMode
     if (!riskForm.value) {
       riskForm.value = { ...nextRiskSettings, allowed_symbols: [...nextRiskSettings.allowed_symbols] }
     }
@@ -514,9 +514,9 @@ watch([chartSymbol, selectedTimeframe], () => {
         <div class="panel-header">
           <div>
             <h2>Manual Trade</h2>
-            <p class="panel-subtitle">Broker {{ brokerMode }} / {{ safetyStatus }}</p>
+            <p class="panel-subtitle">Broker {{ brokerStatus?.mode || 'Paper' }} / {{ safetyStatus }}</p>
           </div>
-          <span class="status-pill" :class="brokerMode.toLowerCase()">{{ brokerMode }}</span>
+          <span class="status-pill" :class="brokerStatus?.mode.toLowerCase() || 'paper'">{{ brokerStatus?.mode || 'Paper' }}</span>
         </div>
 
         <form class="trade-form" @submit.prevent="handleSubmitManualTrade">
@@ -770,7 +770,7 @@ watch([chartSymbol, selectedTimeframe], () => {
         <div class="panel-header">
           <div>
             <h2>Risk Control</h2>
-            <p class="panel-subtitle">Broker {{ brokerMode }} / Symbols {{ riskSettings?.allowed_symbols.join(', ') || '-' }}</p>
+            <p class="panel-subtitle">Broker {{ brokerStatus?.mode || 'Paper' }} / Symbols {{ riskSettings?.allowed_symbols.join(', ') || '-' }}</p>
           </div>
           <span class="status-pill" :class="riskSettings?.enable_auto_trading ? 'paper-position-opened' : 'rejected-by-risk'">
             {{ riskSettings?.enable_auto_trading ? 'Auto On' : 'Auto Off' }}
@@ -778,6 +778,25 @@ watch([chartSymbol, selectedTimeframe], () => {
         </div>
 
         <form v-if="riskForm" class="settings-form" @submit.prevent="handleSaveRiskSettings">
+          <div class="broker-status-card">
+            <div>
+              <span>Broker Status</span>
+              <strong>{{ brokerStatus?.message || 'Paper broker active' }}</strong>
+            </div>
+            <div class="broker-status-flags">
+              <span class="status-pill" :class="brokerStatus?.configured ? 'paper-position-opened' : 'rejected-by-risk'">
+                {{ brokerStatus?.configured ? 'Configured' : 'Not Configured' }}
+              </span>
+              <span class="status-pill" :class="brokerStatus?.enabled ? 'paper-position-opened' : 'rejected-by-risk'">
+                {{ brokerStatus?.enabled ? 'Enabled' : 'Disabled' }}
+              </span>
+              <span class="status-pill" :class="brokerStatus?.connected ? 'paper-position-opened' : 'rejected-by-risk'">
+                {{ brokerStatus?.connected ? 'Connected' : 'Disconnected' }}
+              </span>
+              <span v-if="brokerStatus?.read_only" class="status-pill risk-settings-updated">Read Only</span>
+            </div>
+          </div>
+
           <label class="toggle-row">
             <span>
               <strong>Auto Trading</strong>

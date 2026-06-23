@@ -55,13 +55,18 @@ builder.Services.PostConfigure<RiskSettings>(settings =>
 });
 builder.Services.AddSingleton<RiskSettingsStore>();
 builder.Services.AddScoped<RiskValidator>();
+builder.Services.Configure<IBKRSettings>(builder.Configuration.GetSection("IBKR"));
 builder.Services.AddScoped<PaperBrokerAdapter>();
+builder.Services.AddScoped<IBKRBrokerAdapter>();
 builder.Services.AddScoped<IBrokerAdapter>(serviceProvider =>
 {
     var mode = builder.Configuration.GetValue<string>("Broker:Mode") ?? "Paper";
-    return mode.Equals("Paper", StringComparison.OrdinalIgnoreCase)
-        ? serviceProvider.GetRequiredService<PaperBrokerAdapter>()
-        : throw new InvalidOperationException($"Unsupported broker mode: {mode}");
+    return mode.ToUpperInvariant() switch
+    {
+        "PAPER" => serviceProvider.GetRequiredService<PaperBrokerAdapter>(),
+        "IBKR" => serviceProvider.GetRequiredService<IBKRBrokerAdapter>(),
+        _ => throw new InvalidOperationException($"Unsupported broker mode: {mode}")
+    };
 });
 builder.Services.AddSingleton<IMarketDataProvider, MockMarketDataProvider>();
 
@@ -184,7 +189,7 @@ app.MapGet("/api/market-data/candles", (string? symbol, string? timeframe, IMark
 .WithName("GetCandles")
 .WithOpenApi();
 
-app.MapGet("/api/broker", (IBrokerAdapter brokerAdapter) => Results.Ok(new { mode = brokerAdapter.Name }))
+app.MapGet("/api/broker", (IBrokerAdapter brokerAdapter) => Results.Ok(BrokerStatusResponse.FromStatus(brokerAdapter.GetStatus())))
 .WithName("GetBrokerMode")
 .WithOpenApi();
 
@@ -423,7 +428,11 @@ static async Task<IResult> ProcessSignalAsync(TradingSignalRequest request, bool
     await brokerAdapter.ApplyEntrySignalAsync(signal, db);
     await db.SaveChangesAsync();
 
-    await BroadcastTradingUpdateAsync(hub, isManualTrade ? "manual_trade.created" : "signal.created", signal.Symbol);
+    var eventType = signal.Status == "broker_blocked"
+        ? isManualTrade ? "manual_trade.broker_blocked" : "signal.broker_blocked"
+        : isManualTrade ? "manual_trade.created" : "signal.created";
+
+    await BroadcastTradingUpdateAsync(hub, eventType, signal.Symbol);
 
     return Results.Created($"/api/signals/{signal.Id}", TradingSignalResponse.FromRecord(signal));
 }
