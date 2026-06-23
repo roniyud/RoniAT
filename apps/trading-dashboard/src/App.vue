@@ -67,6 +67,7 @@ const brokerSaveMessage = ref('')
 const brokerTestResult = ref<BrokerConnectionTestResult | null>(null)
 const tradeMessage = ref('')
 const selectedTimeframe = ref<Timeframe>('5m')
+const selectedChartSymbol = ref('MNQ1!')
 const chartCandles = ref<CandlestickData[]>([])
 const chartError = ref('')
 const isChartLoading = ref(false)
@@ -82,7 +83,6 @@ const filledOrderCount = computed(() => orders.value.filter((order) => order.sta
 const cancelledOrderCount = computed(() => orders.value.filter((order) => order.status === 'cancelled').length)
 const rejectedSignalCount = computed(() => signals.value.filter((signal) => signal.status === 'rejected_by_risk').length)
 const approvedSignalCount = computed(() => signals.value.length - rejectedSignalCount.value)
-const chartSymbol = computed(() => signals.value[0]?.symbol || positions.value[0]?.symbol || 'MNQ1!')
 const safetyStatus = computed(() => {
   if (riskSettings.value?.emergency_stop_active) return 'Emergency Stop Active'
   if (riskSettings.value?.trading_locked) return 'Trading Locked'
@@ -105,6 +105,81 @@ const manualTrade = ref<TradingSignalRequest>({
   entry_price: 30736.25,
   symbol: 'MNQ1!',
 })
+
+const chartSymbol = computed(() => selectedChartSymbol.value.trim().toUpperCase() || 'MNQ1!')
+const availableChartSymbols = computed(() => {
+  const symbols = new Set<string>()
+  const candidates = [
+    chartSymbol.value,
+    manualTrade.value.symbol,
+    ...(riskSettings.value?.allowed_symbols ?? []),
+    ...signals.value.map((signal) => signal.symbol),
+    ...orders.value.map((order) => order.symbol),
+    ...positions.value.map((position) => position.symbol),
+  ]
+
+  for (const symbol of candidates) {
+    const normalized = normalizeSymbol(symbol)
+    if (normalized) symbols.add(normalized)
+  }
+
+  if (!symbols.size) symbols.add(chartSymbol.value)
+  return [...symbols].sort()
+})
+const chartLevels = computed(() => {
+  const symbol = chartSymbol.value
+  const levels: { id: string; label: string; price: number; color: string; style?: 'solid' | 'dashed' | 'dotted' }[] = []
+  const latestSignal = signals.value.find((signal) => normalizeSymbol(signal.symbol) === symbol)
+  const symbolPosition = positions.value.find((position) => normalizeSymbol(position.symbol) === symbol)
+  const symbolOrders = orders.value.filter((order) => normalizeSymbol(order.symbol) === symbol && order.status === 'working')
+
+  if (latestSignal) {
+    levels.push(
+      { id: `signal-${latestSignal.id}-entry`, label: 'Entry', price: latestSignal.entry_price, color: '#2563eb', style: 'solid' },
+      { id: `signal-${latestSignal.id}-sl`, label: 'SL', price: latestSignal.stop_loss, color: '#b42318', style: 'dashed' },
+      { id: `signal-${latestSignal.id}-tp1`, label: 'TP1', price: latestSignal.take_profit_1, color: '#13795b', style: 'dashed' },
+      { id: `signal-${latestSignal.id}-tp2`, label: 'TP2', price: latestSignal.take_profit_2, color: '#0f766e', style: 'dotted' },
+    )
+  }
+
+  if (symbolPosition) {
+    levels.push({
+      id: `position-${symbolPosition.id}-avg`,
+      label: 'Avg',
+      price: symbolPosition.averagePrice,
+      color: '#7c3aed',
+      style: 'solid',
+    })
+
+    if (symbolPosition.stopLoss != null) {
+      levels.push({ id: `position-${symbolPosition.id}-sl`, label: 'Pos SL', price: symbolPosition.stopLoss, color: '#b42318', style: 'dotted' })
+    }
+    if (symbolPosition.takeProfit1 != null) {
+      levels.push({ id: `position-${symbolPosition.id}-tp1`, label: 'Pos TP1', price: symbolPosition.takeProfit1, color: '#13795b', style: 'dotted' })
+    }
+    if (symbolPosition.takeProfit2 != null) {
+      levels.push({ id: `position-${symbolPosition.id}-tp2`, label: 'Pos TP2', price: symbolPosition.takeProfit2, color: '#0f766e', style: 'dotted' })
+    }
+  }
+
+  for (const order of symbolOrders) {
+    const price = order.price ?? order.stopPrice
+    if (price == null) continue
+    levels.push({
+      id: `order-${order.id}`,
+      label: `${order.orderType} ${order.direction}`,
+      price,
+      color: '#b45309',
+      style: 'dashed',
+    })
+  }
+
+  return levels.filter((level) => Number.isFinite(level.price))
+})
+
+function normalizeSymbol(symbol?: string | null) {
+  return symbol?.trim().toUpperCase() ?? ''
+}
 
 async function refreshData() {
   isRefreshing.value = true
@@ -588,11 +663,14 @@ watch([chartSymbol, selectedTimeframe], () => {
     <section class="workspace">
       <CandlestickChart
         v-if="activeTab === 'chart'"
+        :available-symbols="availableChartSymbols"
         :candles="chartCandles"
         :error-message="chartError"
         :is-loading="isChartLoading"
+        :levels="chartLevels"
         :symbol="chartSymbol"
         :timeframe="selectedTimeframe"
+        @symbol-change="selectedChartSymbol = $event"
         @timeframe-change="selectedTimeframe = $event"
       />
 

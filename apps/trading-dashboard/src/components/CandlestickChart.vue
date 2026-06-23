@@ -3,34 +3,81 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import {
   CandlestickSeries,
   createChart,
+  LineStyle,
   type CandlestickData,
   type IChartApi,
+  type IPriceLine,
   type ISeriesApi,
 } from 'lightweight-charts'
 import { timeframes, type Timeframe } from '../services/market-data'
 import { BarChart3 } from '@lucide/vue'
 
+type ChartPriceLevel = {
+  id: string
+  label: string
+  price: number
+  color: string
+  style?: 'solid' | 'dashed' | 'dotted'
+}
+
 const props = defineProps<{
+  availableSymbols: string[]
   candles: CandlestickData[]
   errorMessage: string
   isLoading: boolean
+  levels: ChartPriceLevel[]
   symbol: string
   timeframe: Timeframe
 }>()
 
 const emit = defineEmits<{
+  symbolChange: [symbol: string]
   timeframeChange: [timeframe: Timeframe]
 }>()
 
 const chartContainer = ref<HTMLDivElement | null>(null)
 let chart: IChartApi | null = null
 let candleSeries: ISeriesApi<'Candlestick'> | null = null
+let priceLines: IPriceLine[] = []
 let resizeObserver: ResizeObserver | null = null
 
 const latestCandle = computed(() => props.candles.at(-1))
+const formattedSymbol = computed(() => props.symbol.trim().toUpperCase())
 
 function setTimeframe(timeframe: Timeframe) {
   emit('timeframeChange', timeframe)
+}
+
+function setSymbol(event: Event) {
+  const target = event.target as HTMLInputElement
+  emit('symbolChange', target.value.trim().toUpperCase())
+}
+
+function toLineStyle(style: ChartPriceLevel['style']) {
+  if (style === 'dotted') return LineStyle.Dotted
+  if (style === 'dashed') return LineStyle.Dashed
+  return LineStyle.Solid
+}
+
+function syncPriceLines() {
+  if (!candleSeries) return
+
+  for (const priceLine of priceLines) {
+    candleSeries.removePriceLine(priceLine)
+  }
+
+  priceLines = props.levels
+    .filter((level) => Number.isFinite(level.price))
+    .map((level) =>
+      candleSeries!.createPriceLine({
+        price: level.price,
+        color: level.color,
+        lineWidth: 2,
+        lineStyle: toLineStyle(level.style),
+        axisLabelVisible: true,
+        title: level.label,
+      }),
+    )
 }
 
 function renderChart() {
@@ -72,6 +119,7 @@ function renderChart() {
 
   candleSeries = series
   series.setData(props.candles)
+  syncPriceLines()
   chart.timeScale().fitContent()
 
   resizeObserver = new ResizeObserver(() => {
@@ -86,6 +134,14 @@ watch(
     candleSeries?.setData(candles)
     chart?.timeScale().fitContent()
   },
+)
+
+watch(
+  () => props.levels,
+  () => {
+    syncPriceLines()
+  },
+  { deep: true },
 )
 
 onMounted(async () => {
@@ -105,23 +161,49 @@ onUnmounted(() => {
       <div class="chart-title">
         <BarChart3 :size="20" />
         <div>
-          <h2>{{ symbol }}</h2>
-          <span>{{ candles.length }} candles from Trading Engine</span>
+          <h2>{{ formattedSymbol }}</h2>
+          <span>{{ candles.length }} mock candles from Trading Engine</span>
         </div>
       </div>
 
-      <div class="timeframe-control" aria-label="Timeframe">
-        <button
-          v-for="item in timeframes"
-          :key="item"
-          type="button"
-          :class="{ active: item === timeframe }"
-          @click="setTimeframe(item)"
-        >
-          {{ item }}
-        </button>
+      <div class="chart-tools">
+        <label class="chart-symbol-field">
+          <span>Symbol</span>
+          <input
+            :value="symbol"
+            list="chart-symbols"
+            type="text"
+            autocomplete="off"
+            spellcheck="false"
+            @change="setSymbol"
+            @keyup.enter="setSymbol"
+          />
+          <datalist id="chart-symbols">
+            <option v-for="item in availableSymbols" :key="item" :value="item" />
+          </datalist>
+        </label>
+
+        <div class="timeframe-control" aria-label="Timeframe">
+          <button
+            v-for="item in timeframes"
+            :key="item"
+            type="button"
+            :class="{ active: item === timeframe }"
+            @click="setTimeframe(item)"
+          >
+            {{ item }}
+          </button>
+        </div>
       </div>
     </header>
+
+    <div v-if="levels.length" class="chart-levels" aria-label="Chart levels">
+      <span v-for="level in levels" :key="level.id" class="level-chip">
+        <i :style="{ backgroundColor: level.color }" />
+        {{ level.label }}
+        <strong>{{ level.price.toFixed(2) }}</strong>
+      </span>
+    </div>
 
     <div class="chart-body">
       <div ref="chartContainer" class="chart-surface" />
