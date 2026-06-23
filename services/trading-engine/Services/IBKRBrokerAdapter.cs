@@ -286,17 +286,24 @@ public sealed class IBKRBrokerAdapter(
         return new BrokerActionResult(0, 1);
     }
 
-    public Task<BrokerActionResult> FlattenAsync(TradingDbContext db)
+    public async Task<BrokerActionResult> FlattenAsync(TradingDbContext db)
     {
-        RecordBlockedAction(db, "ibkr.flatten_blocked", """
-        {"reason":"IBKR adapter skeleton does not flatten live positions"}
-        """);
+        var symbols = await db.Positions
+            .Select(position => position.Symbol)
+            .ToListAsync();
+
+        var closedPositions = 0;
+        foreach (var symbol in symbols)
+        {
+            var result = await ClosePositionAsync(symbol, db);
+            closedPositions += result.ClosedPositions;
+        }
 
         db.AuditLogs.Add(AuditLogRecord.BrokerAction(
-            "ibkr.flatten_blocked",
-            "IBKR skeleton blocked flatten"));
+            "ibkr.flatten",
+            $"IBKR flatten submitted for {closedPositions} system-owned positions"));
 
-        return Task.FromResult(new BrokerActionResult(0, 0));
+        return new BrokerActionResult(0, closedPositions);
     }
 
     private static void RecordBlockedAction(TradingDbContext db, string eventType, string payloadJson)
