@@ -46,3 +46,16 @@ export type PaperActionResult = {
   cancelledOrders: number
   closedPositions: number
 }
+
+export type BrokerMode = {
+  mode: string
+}
+
+export type RiskSettings = {
+  max_contracts_per_signal: number
+  allowed_symbols: string[]
+  enable_auto_trading: boolean
+  reject_duplicate_signals: boolean
+  duplicate_window_seconds: number
+  allow_position_stacking: boolean
+}

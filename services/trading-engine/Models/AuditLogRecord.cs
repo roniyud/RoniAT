@@ -1,3 +1,5 @@
+using RoniAT.TradingEngine.Services;
+
 namespace RoniAT.TradingEngine.Models;
 
 public sealed class AuditLogRecord
@@ -33,6 +35,16 @@ public sealed class AuditLogRecord
         {
             Action = "risk.rejected",
             Details = $"Risk rejected signal {signal.Id} {signal.Symbol}: {string.Join("; ", reasons)}",
+            CreatedAt = DateTimeOffset.UtcNow
+        };
+    }
+
+    public static AuditLogRecord RiskSettingsUpdated(RiskSettings settings)
+    {
+        return new AuditLogRecord
+        {
+            Action = "risk.settings_updated",
+            Details = $"Risk settings updated: auto={settings.EnableAutoTrading}, maxContracts={settings.MaxContractsPerSignal}, symbols={string.Join(",", settings.AllowedSymbols)}",
             CreatedAt = DateTimeOffset.UtcNow
         };
     }

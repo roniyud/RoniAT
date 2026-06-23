@@ -1,4 +1,4 @@
-import type { OrderRecord, PaperActionResult, PositionRecord, TradingSignal } from './types'
+import type { BrokerMode, OrderRecord, PaperActionResult, PositionRecord, RiskSettings, TradingSignal } from './types'
 
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/+$/, '')
 
@@ -18,6 +18,31 @@ export async function getOrders() {
 export async function getPositions() {
   const positions = normalizeCollection<Record<string, unknown>>(await request<Record<string, unknown>[] | { value: Record<string, unknown>[] }>('/api/positions'))
   return positions.map(mapPosition)
+}
+
+export async function getBrokerMode() {
+  return request<BrokerMode>('/api/broker')
+}
+
+export async function getRiskSettings() {
+  return request<RiskSettings>('/api/risk/settings')
+}
+
+export async function updateRiskSettings(settings: RiskSettings) {
+  const response = await fetch(`${API_BASE_URL}/api/risk/settings`, {
+    method: 'PUT',
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(settings),
+  })
+
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status} from Trading Engine`)
+  }
+
+  return response.json() as Promise<RiskSettings>
 }
 
 export async function cancelWorkingOrders(symbol?: string) {

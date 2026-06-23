@@ -1,16 +1,14 @@
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Options;
 using RoniAT.TradingEngine.Data;
 using RoniAT.TradingEngine.Models;
 
 namespace RoniAT.TradingEngine.Services;
 
-public sealed class RiskValidator(IOptions<RiskSettings> options)
+public sealed class RiskValidator(RiskSettingsStore settingsStore)
 {
-    private readonly RiskSettings settings = options.Value;
-
     public async Task<RiskValidationResult> ValidateEntrySignalAsync(TradingSignalRecord signal, TradingDbContext db)
     {
+        var settings = settingsStore.Get();
         var reasons = new List<string>();
 
         if (!settings.EnableAutoTrading)

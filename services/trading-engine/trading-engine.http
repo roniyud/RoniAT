@@ -56,6 +56,20 @@ Accept: application/json
 
 ###
 
+PUT {{trading_engine_HostAddress}}/api/risk/settings
+Content-Type: application/json
+
+{
+  "max_contracts_per_signal": 7,
+  "allowed_symbols": [ "MNQ1!" ],
+  "enable_auto_trading": true,
+  "reject_duplicate_signals": true,
+  "duplicate_window_seconds": 120,
+  "allow_position_stacking": false
+}
+
+###
+
 POST {{trading_engine_HostAddress}}/api/broker/orders/cancel-working
 Content-Type: application/json
 

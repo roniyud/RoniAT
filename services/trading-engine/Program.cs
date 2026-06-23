@@ -53,6 +53,7 @@ builder.Services.PostConfigure<RiskSettings>(settings =>
         settings.AllowedSymbols = ["MNQ1!"];
     }
 });
+builder.Services.AddSingleton<RiskSettingsStore>();
 builder.Services.AddScoped<RiskValidator>();
 builder.Services.AddScoped<PaperBrokerAdapter>();
 builder.Services.AddScoped<IBrokerAdapter>(serviceProvider =>
@@ -202,11 +203,38 @@ app.MapGet("/api/broker", (IBrokerAdapter brokerAdapter) => Results.Ok(new { mod
 .WithName("GetBrokerMode")
 .WithOpenApi();
 
-app.MapGet("/api/risk/settings", (Microsoft.Extensions.Options.IOptions<RiskSettings> settings) =>
+app.MapGet("/api/risk/settings", (RiskSettingsStore settingsStore) =>
 {
-    return Results.Ok(RiskSettingsResponse.FromSettings(settings.Value));
+    return Results.Ok(RiskSettingsResponse.FromSettings(settingsStore.Get()));
 })
 .WithName("GetRiskSettings")
+.WithOpenApi();
+
+app.MapPut("/api/risk/settings", async (RiskSettingsUpdateRequest request, RiskSettingsStore settingsStore, TradingDbContext db, IHubContext<TradingHub> hub) =>
+{
+    var result = settingsStore.Update(new RiskSettings
+    {
+        MaxContractsPerSignal = request.MaxContractsPerSignal,
+        AllowedSymbols = request.AllowedSymbols.ToArray(),
+        EnableAutoTrading = request.EnableAutoTrading,
+        RejectDuplicateSignals = request.RejectDuplicateSignals,
+        DuplicateWindowSeconds = request.DuplicateWindowSeconds,
+        AllowPositionStacking = request.AllowPositionStacking
+    });
+
+    if (!result.Ok)
+    {
+        return Results.BadRequest(new ValidationErrorResponse(result.Errors));
+    }
+
+    db.AuditLogs.Add(AuditLogRecord.RiskSettingsUpdated(result.Settings));
+    await db.SaveChangesAsync();
+
+    await BroadcastTradingUpdateAsync(hub, "risk.settings_updated", null);
+
+    return Results.Ok(RiskSettingsResponse.FromSettings(result.Settings));
+})
+.WithName("UpdateRiskSettings")
 .WithOpenApi();
 
 app.MapPost("/api/broker/orders/cancel-working", async (SymbolActionRequest request, TradingDbContext db, IBrokerAdapter brokerAdapter, IHubContext<TradingHub> hub) =>

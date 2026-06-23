@@ -75,7 +75,10 @@ Risk settings endpoint:
 
 ```text
 GET /api/risk/settings
+PUT /api/risk/settings
 ```
+
+The dashboard Settings tab can update these controls at runtime. The trading engine persists runtime risk settings locally in `services/trading-engine/storage/risk-settings.json`, which is intentionally ignored by Git.
 
 Realtime updates are available through SignalR:
 

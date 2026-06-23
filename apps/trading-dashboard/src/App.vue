@@ -10,6 +10,8 @@ import {
   ListChecks,
   RefreshCw,
   Server,
+  Settings2,
+  ShieldCheck,
   WifiOff,
 } from '@lucide/vue'
 import CandlestickChart from './components/CandlestickChart.vue'
@@ -17,25 +19,33 @@ import {
   cancelWorkingOrders,
   closePosition,
   flattenPaperAccount,
+  getBrokerMode,
   getHealth,
   getOrders,
   getPositions,
+  getRiskSettings,
   getSignals,
+  updateRiskSettings,
 } from './services/api'
 import { getCandles, type Timeframe } from './services/market-data'
 import type { CandlestickData } from 'lightweight-charts'
 import { createTradingRealtimeClient, type RealtimeStatus, type TradingUpdate } from './services/realtime'
-import type { ApiState, OrderRecord, PositionRecord, TradingSignal } from './services/types'
+import type { ApiState, OrderRecord, PositionRecord, RiskSettings, TradingSignal } from './services/types'
 
 const apiState = ref<ApiState>('loading')
-const activeTab = ref<'chart' | 'signals' | 'orders' | 'positions'>('chart')
+const activeTab = ref<'chart' | 'signals' | 'orders' | 'positions' | 'settings'>('chart')
 const signals = ref<TradingSignal[]>([])
 const orders = ref<OrderRecord[]>([])
 const positions = ref<PositionRecord[]>([])
+const riskSettings = ref<RiskSettings | null>(null)
+const riskForm = ref<RiskSettings | null>(null)
+const brokerMode = ref('Paper')
 const lastUpdated = ref<Date | null>(null)
 const errorMessage = ref('')
 const isRefreshing = ref(false)
 const activeAction = ref('')
+const isSavingRisk = ref(false)
+const riskSaveMessage = ref('')
 const selectedTimeframe = ref<Timeframe>('5m')
 const chartCandles = ref<CandlestickData[]>([])
 const chartError = ref('')
@@ -60,15 +70,22 @@ async function refreshData() {
 
   try {
     await getHealth()
-    const [nextSignals, nextOrders, nextPositions] = await Promise.all([
+    const [nextSignals, nextOrders, nextPositions, nextRiskSettings, nextBrokerMode] = await Promise.all([
       getSignals(),
       getOrders(),
       getPositions(),
+      getRiskSettings(),
+      getBrokerMode(),
     ])
 
     signals.value = nextSignals
     orders.value = nextOrders
     positions.value = nextPositions
+    riskSettings.value = nextRiskSettings
+    brokerMode.value = nextBrokerMode.mode
+    if (!riskForm.value) {
+      riskForm.value = { ...nextRiskSettings, allowed_symbols: [...nextRiskSettings.allowed_symbols] }
+    }
     lastUpdated.value = new Date()
     apiState.value = 'online'
   } catch (error) {
@@ -133,6 +150,31 @@ async function handleFlatten() {
   )
 }
 
+async function handleSaveRiskSettings() {
+  if (!riskForm.value) return
+
+  isSavingRisk.value = true
+  riskSaveMessage.value = ''
+  errorMessage.value = ''
+
+  try {
+    const saved = await updateRiskSettings({
+      ...riskForm.value,
+      allowed_symbols: normalizeSymbols(symbolsInput.value),
+      max_contracts_per_signal: Number(riskForm.value.max_contracts_per_signal),
+      duplicate_window_seconds: Number(riskForm.value.duplicate_window_seconds),
+    })
+
+    riskSettings.value = saved
+    riskForm.value = { ...saved, allowed_symbols: [...saved.allowed_symbols] }
+    riskSaveMessage.value = 'Risk settings saved'
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : 'Risk settings update failed'
+  } finally {
+    isSavingRisk.value = false
+  }
+}
+
 function formatPrice(value: number | null | undefined) {
   if (value === null || value === undefined) return '-'
   return new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 }).format(value)
@@ -163,6 +205,23 @@ function getWorkingOrdersForSymbol(symbol: string) {
 
 function getStatusClass(status: string) {
   return status.replace(/[^a-z0-9]+/gi, '-').toLowerCase()
+}
+
+const symbolsInput = computed({
+  get() {
+    return riskForm.value?.allowed_symbols.join(', ') || ''
+  },
+  set(value: string) {
+    if (!riskForm.value) return
+    riskForm.value.allowed_symbols = normalizeSymbols(value)
+  },
+})
+
+function normalizeSymbols(value: string) {
+  return value
+    .split(',')
+    .map((symbol) => symbol.trim().toUpperCase())
+    .filter(Boolean)
 }
 
 onMounted(() => {
@@ -251,6 +310,13 @@ watch([chartSymbol, selectedTimeframe], () => {
         </div>
       </article>
       <article class="metric-tile">
+        <ShieldCheck :size="20" />
+        <div>
+          <span>Auto Trading</span>
+          <strong>{{ riskSettings?.enable_auto_trading ? 'On' : 'Off' }}</strong>
+        </div>
+      </article>
+      <article class="metric-tile">
         <Clock3 :size="20" />
         <div>
           <span>{{ lastRealtimeEvent ? lastRealtimeEvent.event_type : 'Updated' }}</span>
@@ -275,6 +341,10 @@ watch([chartSymbol, selectedTimeframe], () => {
       <button type="button" :class="{ active: activeTab === 'positions' }" @click="activeTab = 'positions'">
         <BriefcaseBusiness :size="18" />
         <span>Positions</span>
+      </button>
+      <button type="button" :class="{ active: activeTab === 'settings' }" @click="activeTab = 'settings'">
+        <Settings2 :size="18" />
+        <span>Settings</span>
       </button>
     </nav>
 
@@ -454,6 +524,69 @@ watch([chartSymbol, selectedTimeframe], () => {
             </div>
           </article>
         </div>
+      </div>
+
+      <div v-if="activeTab === 'settings'" class="data-panel settings-panel">
+        <div class="panel-header">
+          <div>
+            <h2>Risk Control</h2>
+            <p class="panel-subtitle">Broker {{ brokerMode }} / Symbols {{ riskSettings?.allowed_symbols.join(', ') || '-' }}</p>
+          </div>
+          <span class="status-pill" :class="riskSettings?.enable_auto_trading ? 'paper-position-opened' : 'rejected-by-risk'">
+            {{ riskSettings?.enable_auto_trading ? 'Auto On' : 'Auto Off' }}
+          </span>
+        </div>
+
+        <form v-if="riskForm" class="settings-form" @submit.prevent="handleSaveRiskSettings">
+          <label class="toggle-row">
+            <span>
+              <strong>Auto Trading</strong>
+              <small>{{ riskForm.enable_auto_trading ? 'Enabled' : 'Disabled' }}</small>
+            </span>
+            <input v-model="riskForm.enable_auto_trading" type="checkbox" />
+          </label>
+
+          <label class="toggle-row">
+            <span>
+              <strong>Reject Duplicate Signals</strong>
+              <small>{{ riskForm.reject_duplicate_signals ? 'Enabled' : 'Disabled' }}</small>
+            </span>
+            <input v-model="riskForm.reject_duplicate_signals" type="checkbox" />
+          </label>
+
+          <label class="toggle-row">
+            <span>
+              <strong>Allow Position Stacking</strong>
+              <small>{{ riskForm.allow_position_stacking ? 'Enabled' : 'Blocked' }}</small>
+            </span>
+            <input v-model="riskForm.allow_position_stacking" type="checkbox" />
+          </label>
+
+          <div class="settings-grid">
+            <label>
+              <span>Max Contracts</span>
+              <input v-model.number="riskForm.max_contracts_per_signal" type="number" min="1" max="100" />
+            </label>
+            <label>
+              <span>Duplicate Window Seconds</span>
+              <input v-model.number="riskForm.duplicate_window_seconds" type="number" min="1" max="3600" />
+            </label>
+            <label class="wide-field">
+              <span>Allowed Symbols</span>
+              <input v-model="symbolsInput" type="text" autocomplete="off" spellcheck="false" />
+            </label>
+          </div>
+
+          <div class="settings-actions">
+            <span class="save-message">{{ riskSaveMessage }}</span>
+            <button class="action-button secondary" type="submit" :disabled="isSavingRisk">
+              <ShieldCheck :size="16" />
+              <span>{{ isSavingRisk ? 'Saving' : 'Save Risk Settings' }}</span>
+            </button>
+          </div>
+        </form>
+
+        <div v-else class="empty-state">Loading settings</div>
       </div>
     </section>
   </main>

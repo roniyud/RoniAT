@@ -9,6 +9,7 @@ node_modules/
 *.db
 *.db-shm
 *.db-wal
+services/trading-engine/storage/*.json
 
 # Build outputs
 dist/
