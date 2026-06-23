@@ -1,0 +1,48 @@
+export type ApiState = 'loading' | 'online' | 'offline'
+
+export type TradingSignal = {
+  id: number
+  type: 'entry'
+  direction: 'LONG' | 'SHORT'
+  contracts: number
+  stop_loss: number
+  take_profit_1: number
+  take_profit_2: number
+  entry_price: number
+  symbol: string
+  status: string
+  created_at: string
+}
+
+export type OrderRecord = {
+  id: number
+  signalId?: number | null
+  brokerOrderId?: string | null
+  symbol: string
+  direction: string
+  orderType: string
+  quantity: number
+  price?: number | null
+  stopPrice?: number | null
+  status: string
+  createdAt?: string | null
+  updatedAt?: string | null
+}
+
+export type PositionRecord = {
+  id: number
+  symbol: string
+  direction: string
+  quantity: number
+  averagePrice: number
+  stopLoss?: number | null
+  takeProfit1?: number | null
+  takeProfit2?: number | null
+  openedAt?: string | null
+  updatedAt?: string | null
+}
+
+export type PaperActionResult = {
+  cancelledOrders: number
+  closedPositions: number
+}

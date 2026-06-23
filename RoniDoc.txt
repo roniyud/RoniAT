@@ -1,0 +1,4 @@
+cd D:\RONI\RoniAT\services\trading-engine
+dotnet run
+
+http://localhost:5066/swagger

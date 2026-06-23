@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://roniat.local/schemas/trading-signal.schema.json",
+  "title": "TradingSignal",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "type",
+    "direction",
+    "contracts",
+    "stop_loss",
+    "take_profit_1",
+    "take_profit_2",
+    "entry_price",
+    "symbol"
+  ],
+  "properties": {
+    "type": {
+      "const": "entry"
+    },
+    "direction": {
+      "enum": ["LONG", "SHORT"]
+    },
+    "contracts": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "stop_loss": {
+      "type": "number"
+    },
+    "take_profit_1": {
+      "type": "number"
+    },
+    "take_profit_2": {
+      "type": "number"
+    },
+    "entry_price": {
+      "type": "number"
+    },
+    "symbol": {
+      "type": "string",
+      "minLength": 1
+    }
+  }
+}
