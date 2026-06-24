@@ -211,6 +211,13 @@ app.MapGet("/api/market-data/candles", async (string? symbol, string? timeframe,
     {
         return Results.BadRequest(new ValidationErrorResponse([error.Message]));
     }
+    catch (InvalidOperationException error)
+    {
+        return Results.Problem(
+            title: "Market data unavailable",
+            detail: error.Message,
+            statusCode: StatusCodes.Status503ServiceUnavailable);
+    }
 })
 .WithName("GetCandles")
 .WithOpenApi();

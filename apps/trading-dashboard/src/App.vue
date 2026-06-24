@@ -294,6 +294,7 @@ async function refreshCandles(showLoading = true) {
   try {
     chartCandles.value = await getCandles(chartSymbol.value, selectedTimeframe.value)
   } catch (error) {
+    chartCandles.value = []
     chartError.value = error instanceof Error ? error.message : 'Market data unavailable'
   } finally {
     isChartRefreshInFlight = false

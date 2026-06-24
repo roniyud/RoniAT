@@ -27,13 +27,14 @@ public sealed class IBKRMarketDataProvider(
                 return candles;
             }
 
-            logger.LogWarning("IBKR historical data returned no candles for {Symbol} {Timeframe}; using mock fallback", symbol, timeframe);
+            var message = $"IBKR historical data returned no candles for {symbol} {timeframe}";
+            logger.LogWarning("{Message}", message);
+            throw new InvalidOperationException(message);
         }
         catch (Exception error) when (error is not OperationCanceledException)
         {
-            logger.LogWarning(error, "IBKR historical data failed for {Symbol} {Timeframe}; using mock fallback", symbol, timeframe);
+            logger.LogWarning(error, "IBKR historical data failed for {Symbol} {Timeframe}", symbol, timeframe);
+            throw new InvalidOperationException($"IBKR historical data failed for {symbol} {timeframe}: {error.Message}", error);
         }
-
-        return fallbackProvider.GetCandles(symbol, timeframe);
     }
 }

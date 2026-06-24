@@ -26,7 +26,7 @@ export async function getCandles(symbol: string, timeframe: Timeframe): Promise<
   })
 
   if (!response.ok) {
-    throw new Error(`HTTP ${response.status} from market data API`)
+    throw new Error(await readMarketDataError(response))
   }
 
   const candles = await response.json() as CandleResponse[]
@@ -38,4 +38,19 @@ export async function getCandles(symbol: string, timeframe: Timeframe): Promise<
     low: candle.low,
     close: candle.close,
   }))
+}
+
+async function readMarketDataError(response: Response) {
+  try {
+    const payload = await response.json() as Record<string, unknown>
+    const detail = typeof payload.detail === 'string' ? payload.detail : ''
+    const title = typeof payload.title === 'string' ? payload.title : ''
+    if (detail && title) return `${title}: ${detail}`
+    if (detail) return detail
+    if (title) return title
+  } catch {
+    // The API normally returns problem+json, but keep a readable fallback for proxies.
+  }
+
+  return `HTTP ${response.status} from market data API`
 }
