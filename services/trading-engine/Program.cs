@@ -740,22 +740,19 @@ static async Task<IResult> ProcessSignalAsync(TradingSignalRequest request, bool
     var normalized = validation.Signal!;
     var signal = TradingSignalRecord.FromRequest(normalized);
     var riskSettings = riskSettingsStore.Get();
-    if (!riskSettings.TestMode)
+    var calculatedContracts = CalculateSignalContracts(signal, riskSettings);
+    if (calculatedContracts <= 0)
     {
-        var calculatedContracts = CalculateSignalContracts(signal, riskSettings);
-        if (calculatedContracts <= 0)
-        {
-            signal.Status = "rejected_by_risk";
-            db.Signals.Add(signal);
-            db.AuditLogs.Add(AuditLogRecord.SignalAccepted(signal));
-            db.AuditLogs.Add(AuditLogRecord.RiskRejected(signal, ["Max loss per trade is too low for the signal stop distance"]));
-            await db.SaveChangesAsync();
-            await BroadcastTradingUpdateAsync(hub, isManualTrade ? "manual_trade.rejected" : "signal.rejected", signal.Symbol);
-            return Results.Created($"/api/signals/{signal.Id}", TradingSignalResponse.FromRecord(signal));
-        }
-
-        signal.Contracts = calculatedContracts;
+        signal.Status = "rejected_by_risk";
+        db.Signals.Add(signal);
+        db.AuditLogs.Add(AuditLogRecord.SignalAccepted(signal));
+        db.AuditLogs.Add(AuditLogRecord.RiskRejected(signal, ["Max loss per trade is too low for one contract at the signal stop distance"]));
+        await db.SaveChangesAsync();
+        await BroadcastTradingUpdateAsync(hub, isManualTrade ? "manual_trade.rejected" : "signal.rejected", signal.Symbol);
+        return Results.Created($"/api/signals/{signal.Id}", TradingSignalResponse.FromRecord(signal));
     }
+
+    signal.Contracts = calculatedContracts;
 
     db.Signals.Add(signal);
     db.AuditLogs.Add(AuditLogRecord.SignalAccepted(signal));
@@ -853,7 +850,9 @@ static int CalculateSignalContracts(TradingSignalRecord signal, RiskSettings set
         return Math.Min(signal.Contracts, settings.MaxContractsPerSignal);
     }
 
-    var stopDistance = Math.Abs(signal.EntryPrice - signal.StopLoss);
+    var stopDistance = settings.TestMode
+        ? 100m
+        : Math.Abs(signal.EntryPrice - signal.StopLoss);
     if (stopDistance <= 0)
     {
         return 0;

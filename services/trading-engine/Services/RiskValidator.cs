@@ -37,18 +37,6 @@ public sealed class RiskValidator(
             reasons.Add($"Contracts {signal.Contracts} exceeds max {settings.MaxContractsPerSignal}");
         }
 
-        if (settings.MaxLossPerTrade > 0)
-        {
-            var stopDistance = settings.TestMode
-                ? 100m
-                : Math.Abs(signal.EntryPrice - signal.StopLoss);
-            var estimatedLoss = stopDistance * signal.Contracts * GetPointValue(signal.Symbol);
-            if (estimatedLoss > settings.MaxLossPerTrade)
-            {
-                reasons.Add($"Estimated loss {estimatedLoss:0.##} exceeds max loss per trade {settings.MaxLossPerTrade:0.##}");
-            }
-        }
-
         var projectedLoss = settings.TestMode
             ? 100m * signal.Contracts * GetPointValue(signal.Symbol)
             : Math.Abs(signal.EntryPrice - signal.StopLoss) * signal.Contracts * GetPointValue(signal.Symbol);
