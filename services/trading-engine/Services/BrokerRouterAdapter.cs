@@ -40,6 +40,11 @@ public sealed class BrokerRouterAdapter(
         return ActiveAdapter.FlattenAsync(db);
     }
 
+    public Task<ProtectionUpdateResult> UpdateProtectionAsync(string symbol, decimal? stopLoss, decimal? takeProfit, TradingDbContext db)
+    {
+        return ActiveAdapter.UpdateProtectionAsync(symbol, stopLoss, takeProfit, db);
+    }
+
     private IBrokerAdapter ActiveAdapter
     {
         get

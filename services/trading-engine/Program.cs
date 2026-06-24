@@ -419,6 +419,27 @@ app.MapPost("/api/broker/flatten", async (TradingDbContext db, IBrokerAdapter br
 .WithName("FlattenAccount")
 .WithOpenApi();
 
+app.MapPut("/api/broker/protection", async (ProtectionUpdateRequest request, TradingDbContext db, IBrokerAdapter brokerAdapter, IHubContext<TradingHub> hub) =>
+{
+    if (string.IsNullOrWhiteSpace(request.Symbol))
+    {
+        return Results.BadRequest(new ValidationErrorResponse(["symbol is required"]));
+    }
+
+    if (request.StopLoss is null && request.TakeProfit is null)
+    {
+        return Results.BadRequest(new ValidationErrorResponse(["stop_loss or take_profit is required"]));
+    }
+
+    var result = await brokerAdapter.UpdateProtectionAsync(request.Symbol, request.StopLoss, request.TakeProfit, db);
+    await db.SaveChangesAsync();
+    await BroadcastTradingUpdateAsync(hub, "protection.updated", request.Symbol);
+
+    return Results.Ok(result);
+})
+.WithName("UpdateProtection")
+.WithOpenApi();
+
 app.MapPost("/api/paper/orders/cancel-working", async (SymbolActionRequest request, TradingDbContext db, IBrokerAdapter brokerAdapter, IHubContext<TradingHub> hub) =>
 {
     var result = await brokerAdapter.CancelWorkingOrdersAsync(request.Symbol, db);

@@ -17,6 +17,7 @@ type ChartPriceLevel = {
   label: string
   price: number
   color: string
+  draggable?: 'stop_loss' | 'take_profit'
   style?: 'solid' | 'dashed' | 'dotted'
 }
 
@@ -61,6 +62,7 @@ const emit = defineEmits<{
   chartTrade: [direction: 'LONG' | 'SHORT']
   closePosition: []
   flatten: []
+  protectionDrag: [field: 'stop_loss' | 'take_profit', price: number]
   requireTradeConfirmationChange: [value: boolean]
   symbolChange: [symbol: string]
   tradeSettingChange: [field: 'contracts', value: number]
@@ -73,6 +75,8 @@ let candleSeries: ISeriesApi<'Candlestick'> | null = null
 let priceLines: IPriceLine[] = []
 let resizeObserver: ResizeObserver | null = null
 let hasFitInitialData = false
+let dragTarget: ChartPriceLevel['draggable'] | null = null
+let lastDragPrice: number | null = null
 
 const latestCandle = computed(() => props.candles.at(-1))
 const formattedSymbol = computed(() => props.symbol.trim().toUpperCase())
@@ -141,6 +145,59 @@ function syncPriceLines() {
     )
 }
 
+function getPriceFromPointer(event: MouseEvent) {
+  if (!chartContainer.value || !candleSeries) return null
+  const bounds = chartContainer.value.getBoundingClientRect()
+  const price = candleSeries.coordinateToPrice(event.clientY - bounds.top)
+  return price == null ? null : Number(price)
+}
+
+function findDraggableLevelAtPrice(price: number) {
+  const draggableLevels = props.levels.filter((level) => level.draggable)
+  if (!chartContainer.value || !candleSeries) return null
+
+  for (const level of draggableLevels) {
+    const coordinate = candleSeries.priceToCoordinate(level.price)
+    const pointerCoordinate = candleSeries.priceToCoordinate(price)
+    if (coordinate == null || pointerCoordinate == null) continue
+    if (Math.abs(coordinate - pointerCoordinate) <= 10) return level.draggable ?? null
+  }
+
+  return null
+}
+
+function handlePointerDown(event: MouseEvent) {
+  const price = getPriceFromPointer(event)
+  if (price == null) return
+
+  const target = findDraggableLevelAtPrice(price)
+  if (!target) return
+
+  dragTarget = target
+  lastDragPrice = price
+  chartContainer.value?.classList.add('dragging-protection')
+  event.preventDefault()
+}
+
+function handlePointerMove(event: MouseEvent) {
+  if (!dragTarget) return
+  const price = getPriceFromPointer(event)
+  if (price == null) return
+
+  lastDragPrice = Math.round(price * 4) / 4
+  event.preventDefault()
+}
+
+function finishProtectionDrag() {
+  if (dragTarget && lastDragPrice != null) {
+    emit('protectionDrag', dragTarget, lastDragPrice)
+  }
+
+  dragTarget = null
+  lastDragPrice = null
+  chartContainer.value?.classList.remove('dragging-protection')
+}
+
 function renderChart() {
   if (!chartContainer.value) return
 
@@ -187,6 +244,9 @@ function renderChart() {
     chart?.applyOptions({ autoSize: true })
   })
   resizeObserver.observe(chartContainer.value)
+  chartContainer.value.addEventListener('mousedown', handlePointerDown)
+  window.addEventListener('mousemove', handlePointerMove)
+  window.addEventListener('mouseup', finishProtectionDrag)
 }
 
 function fitInitialData() {
@@ -224,6 +284,9 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  chartContainer.value?.removeEventListener('mousedown', handlePointerDown)
+  window.removeEventListener('mousemove', handlePointerMove)
+  window.removeEventListener('mouseup', finishProtectionDrag)
   resizeObserver?.disconnect()
   chart?.remove()
 })

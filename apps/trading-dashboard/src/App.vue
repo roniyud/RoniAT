@@ -35,6 +35,7 @@ import {
   submitMarketOrder,
   submitManualTrade,
   testBrokerConnection,
+  updateProtection,
   updateBrokerSettings,
   updateRiskSettings,
 } from './services/api'
@@ -133,7 +134,7 @@ const availableChartSymbols = computed(() => {
 })
 const chartLevels = computed(() => {
   const symbol = chartSymbol.value
-  const levels: { id: string; label: string; price: number; color: string; style?: 'solid' | 'dashed' | 'dotted' }[] = []
+  const levels: { id: string; label: string; price: number; color: string; draggable?: 'stop_loss' | 'take_profit'; style?: 'solid' | 'dashed' | 'dotted' }[] = []
   const symbolPosition = positions.value.find((position) => normalizeSymbol(position.symbol) === symbol)
   const symbolOrders = orders.value.filter((order) => normalizeSymbol(order.symbol) === symbol && order.status === 'working')
   const hasPositionProtection = symbolPosition?.stopLoss != null
@@ -150,10 +151,10 @@ const chartLevels = computed(() => {
     })
 
     if (symbolPosition.stopLoss != null) {
-      levels.push({ id: `position-${symbolPosition.id}-sl`, label: 'Pos SL', price: symbolPosition.stopLoss, color: '#b42318', style: 'dotted' })
+      levels.push({ id: `position-${symbolPosition.id}-sl`, label: 'SL', price: symbolPosition.stopLoss, color: '#b42318', draggable: 'stop_loss', style: 'dotted' })
     }
     if (symbolPosition.takeProfit1 != null) {
-      levels.push({ id: `position-${symbolPosition.id}-tp1`, label: 'Pos TP1', price: symbolPosition.takeProfit1, color: '#13795b', style: 'dotted' })
+      levels.push({ id: `position-${symbolPosition.id}-tp1`, label: 'TP', price: symbolPosition.takeProfit1, color: '#13795b', draggable: 'take_profit', style: 'dotted' })
     }
     if (symbolPosition.takeProfit2 != null) {
       levels.push({ id: `position-${symbolPosition.id}-tp2`, label: 'Pos TP2', price: symbolPosition.takeProfit2, color: '#0f766e', style: 'dotted' })
@@ -410,6 +411,29 @@ async function handleFlatten() {
     () => flattenPaperAccount(),
     requireChartTradeConfirmation.value,
   )
+}
+
+async function handleProtectionDrag(field: 'stop_loss' | 'take_profit', price: number) {
+  activeAction.value = `protection-${field}`
+  errorMessage.value = ''
+  tradeMessage.value = ''
+
+  try {
+    const result = await updateProtection({
+      symbol: chartSymbol.value,
+      stop_loss: field === 'stop_loss' ? price : undefined,
+      take_profit: field === 'take_profit' ? price : undefined,
+    })
+
+    tradeMessage.value = result.ok
+      ? `${field === 'stop_loss' ? 'SL' : 'TP'} updated to ${formatPrice(price)}`
+      : `Protection update failed: ${result.message}`
+    await refreshData()
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : 'Protection update failed'
+  } finally {
+    activeAction.value = ''
+  }
 }
 
 async function handleSaveRiskSettings() {
@@ -917,6 +941,7 @@ watch(activeTab, (tab) => {
         @chart-trade="handleSubmitChartTrade"
         @close-position="handleClosePosition(chartSymbol)"
         @flatten="handleFlatten"
+        @protection-drag="handleProtectionDrag"
         @require-trade-confirmation-change="requireChartTradeConfirmation = $event"
         @symbol-change="selectedChartSymbol = $event"
         @trade-setting-change="updateChartTradeSetting"

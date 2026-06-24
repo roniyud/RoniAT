@@ -42,6 +42,19 @@ export type MarketOrderResponse = {
   position?: PositionRecord | null
 }
 
+export type ProtectionUpdateRequest = {
+  symbol: string
+  stop_loss?: number | null
+  take_profit?: number | null
+}
+
+export type ProtectionUpdateResponse = {
+  ok: boolean
+  status: string
+  message: string
+  position?: PositionRecord | null
+}
+
 export type OrderRecord = {
   id: number
   signalId?: number | null

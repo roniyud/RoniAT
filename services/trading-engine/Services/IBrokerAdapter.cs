@@ -18,6 +18,8 @@ public interface IBrokerAdapter
     Task<BrokerActionResult> ClosePositionAsync(string symbol, TradingDbContext db);
 
     Task<BrokerActionResult> FlattenAsync(TradingDbContext db);
+
+    Task<ProtectionUpdateResult> UpdateProtectionAsync(string symbol, decimal? stopLoss, decimal? takeProfit, TradingDbContext db);
 }
 
 public sealed record BrokerActionResult(int CancelledOrders, int ClosedPositions);
@@ -27,6 +29,13 @@ public sealed record MarketOrderResult(
     string Status,
     string Message,
     OrderRecord? Order,
+    PositionRecord? Position
+);
+
+public sealed record ProtectionUpdateResult(
+    bool Ok,
+    string Status,
+    string Message,
     PositionRecord? Position
 );
 

@@ -374,6 +374,84 @@ public sealed class IBKRBrokerAdapter(
         return new BrokerActionResult(0, closedPositions);
     }
 
+    public async Task<ProtectionUpdateResult> UpdateProtectionAsync(string symbol, decimal? stopLoss, decimal? takeProfit, TradingDbContext db)
+    {
+        var normalizedSymbol = symbol.Trim().ToUpperInvariant();
+        var position = await db.Positions.SingleOrDefaultAsync(item => item.Symbol == normalizedSymbol);
+        if (position is null)
+        {
+            return new ProtectionUpdateResult(false, "not_found", $"No system-owned IBKR position found for {normalizedSymbol}", null);
+        }
+
+        var nextStopLoss = stopLoss ?? position.StopLoss;
+        var nextTakeProfit = takeProfit ?? position.TakeProfit1;
+        if (nextStopLoss is null || nextTakeProfit is null)
+        {
+            return new ProtectionUpdateResult(false, "missing_protection", "Both stop loss and take profit are required to rebuild OCA protection", position);
+        }
+
+        var validationError = ValidateProtection(position, nextStopLoss, nextTakeProfit);
+        if (validationError is not null)
+        {
+            return new ProtectionUpdateResult(false, "invalid_protection", validationError, position);
+        }
+
+        await CancelWorkingOrdersAsync(normalizedSymbol, db);
+        var protectiveOrders = await connectionSession.PlaceProtectiveExitOrdersAsync(
+            normalizedSymbol,
+            position.Direction,
+            position.Quantity,
+            nextStopLoss.Value,
+            nextTakeProfit.Value);
+
+        var now = DateTimeOffset.UtcNow;
+        position.StopLoss = nextStopLoss;
+        position.TakeProfit1 = nextTakeProfit;
+        position.TakeProfit2 = null;
+        position.UpdatedAt = now;
+
+        foreach (var protectiveOrder in protectiveOrders)
+        {
+            var isStop = protectiveOrder.OrderId == protectiveOrders[0].OrderId;
+            db.Orders.Add(new OrderRecord
+            {
+                BrokerOrderId = protectiveOrder.OrderId.ToString(),
+                Symbol = normalizedSymbol,
+                Direction = position.Direction == "LONG" ? "SHORT" : "LONG",
+                OrderType = isStop ? "ibkr_stop_loss" : "ibkr_take_profit",
+                Quantity = position.Quantity,
+                Price = isStop ? null : nextTakeProfit,
+                StopPrice = isStop ? nextStopLoss : null,
+                Status = "working",
+                CreatedAt = now,
+                UpdatedAt = now
+            });
+        }
+
+        db.AuditLogs.Add(AuditLogRecord.BrokerAction(
+            "ibkr.protection_updated",
+            $"Updated IBKR protection for {normalizedSymbol}: SL={position.StopLoss}, TP={position.TakeProfit1}"));
+
+        return new ProtectionUpdateResult(true, "updated", "IBKR protection updated", position);
+    }
+
+    private static string? ValidateProtection(PositionRecord position, decimal? stopLoss, decimal? takeProfit)
+    {
+        if (position.Direction == "LONG")
+        {
+            if (stopLoss is not null && stopLoss >= position.AveragePrice) return "LONG stop loss must be below average price";
+            if (takeProfit is not null && takeProfit <= position.AveragePrice) return "LONG take profit must be above average price";
+        }
+
+        if (position.Direction == "SHORT")
+        {
+            if (stopLoss is not null && stopLoss <= position.AveragePrice) return "SHORT stop loss must be above average price";
+            if (takeProfit is not null && takeProfit >= position.AveragePrice) return "SHORT take profit must be below average price";
+        }
+
+        return null;
+    }
+
     private static void RecordBlockedAction(TradingDbContext db, string eventType, string payloadJson)
     {
         db.BrokerEvents.Add(new BrokerEventRecord

@@ -570,6 +570,11 @@ h3 {
   background: #fff7f7;
 }
 
+.chart-surface.dragging-protection,
+.chart-surface.dragging-protection * {
+  cursor: ns-resize !important;
+}
+
 .chart-levels {
   display: flex;
   gap: 8px;

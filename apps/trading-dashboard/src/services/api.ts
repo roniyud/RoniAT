@@ -1,4 +1,4 @@
-import type { AuditLogRecord, BrokerConnectionTestResult, BrokerMode, BrokerSettings, MarketOrderRequest, MarketOrderResponse, OrderRecord, PaperActionResult, PositionRecord, RiskSettings, TradingSignal, TradingSignalRequest } from './types'
+import type { AuditLogRecord, BrokerConnectionTestResult, BrokerMode, BrokerSettings, MarketOrderRequest, MarketOrderResponse, OrderRecord, PaperActionResult, PositionRecord, ProtectionUpdateRequest, ProtectionUpdateResponse, RiskSettings, TradingSignal, TradingSignalRequest } from './types'
 
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/+$/, '')
 
@@ -164,6 +164,29 @@ export async function closePosition(symbol: string) {
 
 export async function flattenPaperAccount() {
   return postBrokerAction('/api/broker/flatten', {})
+}
+
+export async function updateProtection(update: ProtectionUpdateRequest) {
+  const response = await fetch(`${API_BASE_URL}/api/broker/protection`, {
+    method: 'PUT',
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(update),
+  })
+
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status} from Trading Engine`)
+  }
+
+  const payload = await response.json() as Record<string, unknown>
+  return {
+    ok: Boolean(payload.ok ?? payload.Ok),
+    status: readString(payload, 'status', 'Status'),
+    message: readString(payload, 'message', 'Message'),
+    position: payload.position || payload.Position ? mapPosition((payload.position ?? payload.Position) as Record<string, unknown>) : null,
+  } satisfies ProtectionUpdateResponse
 }
 
 async function request<T>(path: string): Promise<T> {

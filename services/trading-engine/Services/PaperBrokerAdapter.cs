@@ -295,6 +295,74 @@ public sealed class PaperBrokerAdapter : IBrokerAdapter
         return new BrokerActionResult(cancelledOrders, closedPositions);
     }
 
+    public async Task<ProtectionUpdateResult> UpdateProtectionAsync(string symbol, decimal? stopLoss, decimal? takeProfit, TradingDbContext db)
+    {
+        var normalizedSymbol = NormalizeSymbol(symbol);
+        if (normalizedSymbol is null)
+        {
+            throw new ArgumentException("symbol is required", nameof(symbol));
+        }
+
+        var position = await db.Positions.SingleOrDefaultAsync(item => item.Symbol == normalizedSymbol);
+        if (position is null)
+        {
+            return new ProtectionUpdateResult(false, "not_found", $"No position found for {normalizedSymbol}", null);
+        }
+
+        var validationError = ValidateProtection(position, stopLoss ?? position.StopLoss, takeProfit ?? position.TakeProfit1);
+        if (validationError is not null)
+        {
+            return new ProtectionUpdateResult(false, "invalid_protection", validationError, position);
+        }
+
+        position.StopLoss = stopLoss ?? position.StopLoss;
+        position.TakeProfit1 = takeProfit ?? position.TakeProfit1;
+        position.TakeProfit2 = null;
+        position.UpdatedAt = DateTimeOffset.UtcNow;
+
+        var workingOrders = await db.Orders
+            .Where(order => order.Symbol == normalizedSymbol && order.Status == "working")
+            .ToListAsync();
+
+        foreach (var order in workingOrders)
+        {
+            if (order.OrderType.Contains("stop_loss", StringComparison.OrdinalIgnoreCase) && position.StopLoss is not null)
+            {
+                order.StopPrice = position.StopLoss;
+                order.UpdatedAt = position.UpdatedAt;
+            }
+
+            if (order.OrderType.Contains("take_profit", StringComparison.OrdinalIgnoreCase) && position.TakeProfit1 is not null)
+            {
+                order.Price = position.TakeProfit1;
+                order.UpdatedAt = position.UpdatedAt;
+            }
+        }
+
+        db.AuditLogs.Add(AuditLogRecord.PaperAction(
+            "paper.protection_updated",
+            $"Updated paper protection for {normalizedSymbol}: SL={position.StopLoss}, TP={position.TakeProfit1}"));
+
+        return new ProtectionUpdateResult(true, "updated", "Paper protection updated", position);
+    }
+
+    private static string? ValidateProtection(PositionRecord position, decimal? stopLoss, decimal? takeProfit)
+    {
+        if (position.Direction == "LONG")
+        {
+            if (stopLoss is not null && stopLoss >= position.AveragePrice) return "LONG stop loss must be below average price";
+            if (takeProfit is not null && takeProfit <= position.AveragePrice) return "LONG take profit must be above average price";
+        }
+
+        if (position.Direction == "SHORT")
+        {
+            if (stopLoss is not null && stopLoss <= position.AveragePrice) return "SHORT stop loss must be above average price";
+            if (takeProfit is not null && takeProfit >= position.AveragePrice) return "SHORT take profit must be below average price";
+        }
+
+        return null;
+    }
+
     private static async Task UpsertPositionAsync(TradingSignalRecord signal, TradingDbContext db, DateTimeOffset now)
     {
         var existing = await db.Positions.SingleOrDefaultAsync(position => position.Symbol == signal.Symbol);
