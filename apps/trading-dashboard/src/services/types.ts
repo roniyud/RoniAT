@@ -133,6 +133,7 @@ export type RiskSettings = {
   max_contracts_per_signal: number
   max_loss_per_trade: number
   max_daily_loss: number
+  max_entry_price_deviation_points: number
   allowed_symbols: string[]
   test_mode: boolean
   ignore_tp2: boolean

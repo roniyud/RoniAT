@@ -470,6 +470,7 @@ async function handleSaveRiskSettings() {
       max_contracts_per_signal: Number(riskForm.value.max_contracts_per_signal),
       max_loss_per_trade: Number(riskForm.value.max_loss_per_trade),
       max_daily_loss: Number(riskForm.value.max_daily_loss),
+      max_entry_price_deviation_points: Number(riskForm.value.max_entry_price_deviation_points),
       duplicate_window_seconds: Number(riskForm.value.duplicate_window_seconds),
     })
 
@@ -1492,6 +1493,10 @@ watch(activeTab, (tab) => {
             <label>
               <span>Max Daily Loss</span>
               <input v-model.number="riskForm.max_daily_loss" type="number" min="0" step="1" />
+            </label>
+            <label>
+              <span>Max Entry Distance Points</span>
+              <input v-model.number="riskForm.max_entry_price_deviation_points" type="number" min="0" step="0.25" />
             </label>
             <label>
               <span>Duplicate Window Seconds</span>

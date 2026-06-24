@@ -132,7 +132,7 @@ public sealed class IBKRBrokerAdapter(
         }
     }
 
-    public async Task<MarketOrderResult> PlaceMarketOrderAsync(string symbol, string direction, int contracts, decimal? referencePrice, TradingDbContext db, bool attachProtection = false, decimal? protectionDistance = null)
+    public async Task<MarketOrderResult> PlaceMarketOrderAsync(string symbol, string direction, int contracts, decimal? referencePrice, TradingDbContext db, bool attachProtection = false, decimal? protectionDistance = null, decimal? stopLoss = null, decimal? takeProfit = null)
     {
         var brokerSettings = settingsStore.Get();
         var settings = settingsStore.GetActiveIBKRSettings();
@@ -192,16 +192,18 @@ public sealed class IBKRBrokerAdapter(
                 if (attachProtection && position is not null)
                 {
                     var distance = protectionDistance is > 0 ? protectionDistance.Value : 100m;
-                    var (stopLoss, takeProfit) = CalculateProtectionLevels(normalizedDirection, submittedOrder.AverageFillPrice, distance);
+                    var (calculatedStopLoss, calculatedTakeProfit) = CalculateProtectionLevels(normalizedDirection, submittedOrder.AverageFillPrice, distance);
+                    var effectiveStopLoss = stopLoss ?? calculatedStopLoss;
+                    var effectiveTakeProfit = takeProfit ?? calculatedTakeProfit;
                     var protectiveOrders = await connectionSession.PlaceProtectiveExitOrdersAsync(
                         normalizedSymbol,
                         normalizedDirection,
                         contracts,
-                        stopLoss,
-                        takeProfit);
+                        effectiveStopLoss,
+                        effectiveTakeProfit);
 
-                    position.StopLoss = stopLoss;
-                    position.TakeProfit1 = takeProfit;
+                    position.StopLoss = effectiveStopLoss;
+                    position.TakeProfit1 = effectiveTakeProfit;
                     position.TakeProfit2 = null;
                     position.UpdatedAt = now;
 
@@ -215,8 +217,8 @@ public sealed class IBKRBrokerAdapter(
                             Direction = normalizedDirection == "LONG" ? "SHORT" : "LONG",
                             OrderType = isStop ? "ibkr_stop_loss" : "ibkr_take_profit",
                             Quantity = contracts,
-                            Price = isStop ? null : takeProfit,
-                            StopPrice = isStop ? stopLoss : null,
+                            Price = isStop ? null : effectiveTakeProfit,
+                            StopPrice = isStop ? effectiveStopLoss : null,
                             Status = MapOrderStatus(protectiveOrder.Status),
                             CreatedAt = now,
                             UpdatedAt = now

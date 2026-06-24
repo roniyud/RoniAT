@@ -86,6 +86,7 @@ public sealed class RiskSettingsStore
             MaxContractsPerSignal = settings.MaxContractsPerSignal,
             MaxLossPerTrade = settings.MaxLossPerTrade,
             MaxDailyLoss = settings.MaxDailyLoss,
+            MaxEntryPriceDeviationPoints = settings.MaxEntryPriceDeviationPoints,
             AllowedSymbols = allowedSymbols,
             TestMode = settings.TestMode,
             IgnoreTakeProfit2 = settings.IgnoreTakeProfit2,
@@ -117,6 +118,11 @@ public sealed class RiskSettingsStore
             errors.Add("max_daily_loss must be between 0 and 1000000");
         }
 
+        if (settings.MaxEntryPriceDeviationPoints is < 0 or > 10_000)
+        {
+            errors.Add("max_entry_price_deviation_points must be between 0 and 10000");
+        }
+
         if (settings.AllowedSymbols.Length == 0)
         {
             errors.Add("allowed_symbols must include at least one symbol");
@@ -137,6 +143,7 @@ public sealed class RiskSettingsStore
             MaxContractsPerSignal = settings.MaxContractsPerSignal,
             MaxLossPerTrade = settings.MaxLossPerTrade,
             MaxDailyLoss = settings.MaxDailyLoss,
+            MaxEntryPriceDeviationPoints = settings.MaxEntryPriceDeviationPoints,
             AllowedSymbols = settings.AllowedSymbols.ToArray(),
             TestMode = settings.TestMode,
             IgnoreTakeProfit2 = settings.IgnoreTakeProfit2,

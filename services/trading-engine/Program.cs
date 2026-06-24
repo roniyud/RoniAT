@@ -115,13 +115,13 @@ app.MapGet("/health", () => Results.Ok(new { status = "ok", service = "trading-e
 
 app.MapHub<TradingHub>("/hubs/trading");
 
-app.MapPost("/api/signals", async (TradingSignalRequest request, TradingDbContext db, IBrokerAdapter brokerAdapter, RiskValidator riskValidator, RiskSettingsStore riskSettingsStore, IHubContext<TradingHub> hub) =>
-    await ProcessSignalAsync(request, isManualTrade: false, db, brokerAdapter, riskValidator, riskSettingsStore, hub))
+app.MapPost("/api/signals", async (TradingSignalRequest request, TradingDbContext db, IBrokerAdapter brokerAdapter, RiskValidator riskValidator, RiskSettingsStore riskSettingsStore, IMarketDataProvider marketDataProvider, IHubContext<TradingHub> hub) =>
+    await ProcessSignalAsync(request, isManualTrade: false, db, brokerAdapter, riskValidator, riskSettingsStore, marketDataProvider, hub))
 .WithName("CreateSignal")
 .WithOpenApi();
 
-app.MapPost("/api/manual-trades", async (TradingSignalRequest request, TradingDbContext db, IBrokerAdapter brokerAdapter, RiskValidator riskValidator, RiskSettingsStore riskSettingsStore, IHubContext<TradingHub> hub) =>
-    await ProcessSignalAsync(request, isManualTrade: true, db, brokerAdapter, riskValidator, riskSettingsStore, hub))
+app.MapPost("/api/manual-trades", async (TradingSignalRequest request, TradingDbContext db, IBrokerAdapter brokerAdapter, RiskValidator riskValidator, RiskSettingsStore riskSettingsStore, IMarketDataProvider marketDataProvider, IHubContext<TradingHub> hub) =>
+    await ProcessSignalAsync(request, isManualTrade: true, db, brokerAdapter, riskValidator, riskSettingsStore, marketDataProvider, hub))
 .WithName("CreateManualTrade")
 .WithOpenApi();
 
@@ -325,6 +325,7 @@ app.MapPut("/api/risk/settings", async (RiskSettingsUpdateRequest request, RiskS
         MaxContractsPerSignal = request.MaxContractsPerSignal,
         MaxLossPerTrade = request.MaxLossPerTrade,
         MaxDailyLoss = request.MaxDailyLoss,
+        MaxEntryPriceDeviationPoints = request.MaxEntryPriceDeviationPoints,
         AllowedSymbols = request.AllowedSymbols.ToArray(),
         TestMode = request.TestMode,
         IgnoreTakeProfit2 = request.IgnoreTakeProfit2,
@@ -699,7 +700,7 @@ static decimal GetPointValue(string symbol)
     };
 }
 
-static async Task<IResult> ProcessSignalAsync(TradingSignalRequest request, bool isManualTrade, TradingDbContext db, IBrokerAdapter brokerAdapter, RiskValidator riskValidator, RiskSettingsStore riskSettingsStore, IHubContext<TradingHub> hub)
+static async Task<IResult> ProcessSignalAsync(TradingSignalRequest request, bool isManualTrade, TradingDbContext db, IBrokerAdapter brokerAdapter, RiskValidator riskValidator, RiskSettingsStore riskSettingsStore, IMarketDataProvider marketDataProvider, IHubContext<TradingHub> hub)
 {
     var validation = TradingSignalValidator.Validate(request);
     if (!validation.Ok)
@@ -709,6 +710,23 @@ static async Task<IResult> ProcessSignalAsync(TradingSignalRequest request, bool
 
     var normalized = validation.Signal!;
     var signal = TradingSignalRecord.FromRequest(normalized);
+    var riskSettings = riskSettingsStore.Get();
+    if (!riskSettings.TestMode)
+    {
+        var calculatedContracts = CalculateSignalContracts(signal, riskSettings);
+        if (calculatedContracts <= 0)
+        {
+            signal.Status = "rejected_by_risk";
+            db.Signals.Add(signal);
+            db.AuditLogs.Add(AuditLogRecord.SignalAccepted(signal));
+            db.AuditLogs.Add(AuditLogRecord.RiskRejected(signal, ["Max loss per trade is too low for the signal stop distance"]));
+            await db.SaveChangesAsync();
+            await BroadcastTradingUpdateAsync(hub, isManualTrade ? "manual_trade.rejected" : "signal.rejected", signal.Symbol);
+            return Results.Created($"/api/signals/{signal.Id}", TradingSignalResponse.FromRecord(signal));
+        }
+
+        signal.Contracts = calculatedContracts;
+    }
 
     db.Signals.Add(signal);
     db.AuditLogs.Add(AuditLogRecord.SignalAccepted(signal));
@@ -732,7 +750,6 @@ static async Task<IResult> ProcessSignalAsync(TradingSignalRequest request, bool
     }
 
     db.AuditLogs.Add(AuditLogRecord.RiskApproved(signal));
-    var riskSettings = riskSettingsStore.Get();
     if (riskSettings.TestMode)
     {
         const decimal testProtectionDistance = 100m;
@@ -754,17 +771,89 @@ static async Task<IResult> ProcessSignalAsync(TradingSignalRequest request, bool
     }
     else
     {
-        await brokerAdapter.ApplyEntrySignalAsync(signal, db);
+        var currentPriceResult = await TryGetCurrentPriceAsync(signal.Symbol, marketDataProvider);
+        if (currentPriceResult.Price is null)
+        {
+            signal.Status = "rejected_by_risk";
+            db.AuditLogs.Add(AuditLogRecord.RiskRejected(signal, [$"Current price unavailable: {currentPriceResult.Error}"]));
+        }
+        else if (riskSettings.MaxEntryPriceDeviationPoints > 0
+            && Math.Abs(signal.EntryPrice - currentPriceResult.Price.Value) > riskSettings.MaxEntryPriceDeviationPoints)
+        {
+            signal.Status = "ignored_entry_price_too_far";
+            db.AuditLogs.Add(AuditLogRecord.RiskRejected(signal, [$"Entry price {signal.EntryPrice} is {Math.Abs(signal.EntryPrice - currentPriceResult.Price.Value):0.##} points from current price {currentPriceResult.Price.Value:0.##}, max allowed {riskSettings.MaxEntryPriceDeviationPoints:0.##}"]));
+        }
+        else
+        {
+            var result = await brokerAdapter.PlaceMarketOrderAsync(
+                signal.Symbol,
+                signal.Direction,
+                signal.Contracts,
+                currentPriceResult.Price,
+                db,
+                attachProtection: true,
+                protectionDistance: null,
+                stopLoss: signal.StopLoss,
+                takeProfit: signal.TakeProfit1);
+
+            signal.Status = result.Ok
+                ? "market_order_with_signal_protection_sent"
+                : result.Status == "blocked" ? "broker_blocked" : "market_order_failed";
+            db.AuditLogs.Add(AuditLogRecord.BrokerAction(
+                result.Ok ? "signal.market_order_sent" : "signal.market_order_failed",
+                $"Signal {signal.Id} {signal.Symbol} {signal.Direction} {signal.Contracts} converted to market order with signal SL={signal.StopLoss} TP1={signal.TakeProfit1}: {result.Message}"));
+        }
     }
     await db.SaveChangesAsync();
 
     var eventType = signal.Status == "broker_blocked"
         ? isManualTrade ? "manual_trade.broker_blocked" : "signal.broker_blocked"
-        : isManualTrade ? "manual_trade.created" : "signal.created";
+        : signal.Status is "rejected_by_risk" or "ignored_entry_price_too_far"
+            ? isManualTrade ? "manual_trade.rejected" : "signal.rejected"
+            : isManualTrade ? "manual_trade.created" : "signal.created";
 
     await BroadcastTradingUpdateAsync(hub, eventType, signal.Symbol);
 
     return Results.Created($"/api/signals/{signal.Id}", TradingSignalResponse.FromRecord(signal));
+}
+
+static int CalculateSignalContracts(TradingSignalRecord signal, RiskSettings settings)
+{
+    if (settings.MaxLossPerTrade <= 0)
+    {
+        return Math.Min(signal.Contracts, settings.MaxContractsPerSignal);
+    }
+
+    var stopDistance = Math.Abs(signal.EntryPrice - signal.StopLoss);
+    if (stopDistance <= 0)
+    {
+        return 0;
+    }
+
+    var riskPerContract = stopDistance * GetPointValue(signal.Symbol);
+    if (riskPerContract <= 0)
+    {
+        return 0;
+    }
+
+    var calculated = (int)Math.Floor(settings.MaxLossPerTrade / riskPerContract);
+    return Math.Min(calculated, settings.MaxContractsPerSignal);
+}
+
+static async Task<(decimal? Price, string? Error)> TryGetCurrentPriceAsync(string symbol, IMarketDataProvider marketDataProvider)
+{
+    try
+    {
+        var candles = await marketDataProvider.GetCandlesAsync(symbol, "1m");
+        var latest = candles.LastOrDefault();
+        return latest is null
+            ? (null, "no candles returned")
+            : (latest.Close, null);
+    }
+    catch (Exception error) when (error is not OperationCanceledException)
+    {
+        return (null, error.Message);
+    }
 }
 
 sealed record MarketOrderValidationResult(

@@ -112,7 +112,7 @@ public sealed class PaperBrokerAdapter(RiskSettingsStore riskSettingsStore) : IB
         db.AuditLogs.Add(AuditLogRecord.PaperPositionOpened(signal));
     }
 
-    public async Task<MarketOrderResult> PlaceMarketOrderAsync(string symbol, string direction, int contracts, decimal? referencePrice, TradingDbContext db, bool attachProtection = false, decimal? protectionDistance = null)
+    public async Task<MarketOrderResult> PlaceMarketOrderAsync(string symbol, string direction, int contracts, decimal? referencePrice, TradingDbContext db, bool attachProtection = false, decimal? protectionDistance = null, decimal? stopLoss = null, decimal? takeProfit = null)
     {
         var normalizedSymbol = NormalizeSymbol(symbol);
         if (normalizedSymbol is null)
@@ -153,13 +153,15 @@ public sealed class PaperBrokerAdapter(RiskSettingsStore riskSettingsStore) : IB
         if (attachProtection && position is not null)
         {
             var distance = protectionDistance is > 0 ? protectionDistance.Value : 100m;
-            var (stopLoss, takeProfit) = normalizedDirection == "LONG"
+            var (calculatedStopLoss, calculatedTakeProfit) = normalizedDirection == "LONG"
                 ? (fillPrice - distance, fillPrice + distance)
                 : (fillPrice + distance, fillPrice - distance);
+            var effectiveStopLoss = stopLoss ?? calculatedStopLoss;
+            var effectiveTakeProfit = takeProfit ?? calculatedTakeProfit;
             var exitDirection = normalizedDirection == "LONG" ? "SHORT" : "LONG";
 
-            position.StopLoss = stopLoss;
-            position.TakeProfit1 = takeProfit;
+            position.StopLoss = effectiveStopLoss;
+            position.TakeProfit1 = effectiveTakeProfit;
             position.TakeProfit2 = null;
             position.UpdatedAt = now;
 
@@ -170,7 +172,7 @@ public sealed class PaperBrokerAdapter(RiskSettingsStore riskSettingsStore) : IB
                 Direction = exitDirection,
                 OrderType = "paper_stop_loss",
                 Quantity = contracts,
-                StopPrice = stopLoss,
+                StopPrice = effectiveStopLoss,
                 Status = "working",
                 CreatedAt = now,
                 UpdatedAt = now
@@ -183,7 +185,7 @@ public sealed class PaperBrokerAdapter(RiskSettingsStore riskSettingsStore) : IB
                 Direction = exitDirection,
                 OrderType = "paper_take_profit",
                 Quantity = contracts,
-                Price = takeProfit,
+                Price = effectiveTakeProfit,
                 Status = "working",
                 CreatedAt = now,
                 UpdatedAt = now
