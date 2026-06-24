@@ -323,7 +323,11 @@ app.MapPut("/api/risk/settings", async (RiskSettingsUpdateRequest request, RiskS
     var result = settingsStore.Update(new RiskSettings
     {
         MaxContractsPerSignal = request.MaxContractsPerSignal,
+        MaxLossPerTrade = request.MaxLossPerTrade,
+        MaxDailyLoss = request.MaxDailyLoss,
         AllowedSymbols = request.AllowedSymbols.ToArray(),
+        TestMode = request.TestMode,
+        IgnoreTakeProfit2 = request.IgnoreTakeProfit2,
         EnableAutoTrading = request.EnableAutoTrading,
         RejectDuplicateSignals = request.RejectDuplicateSignals,
         DuplicateWindowSeconds = request.DuplicateWindowSeconds,
@@ -670,7 +674,29 @@ static async Task<MarketOrderValidationResult> ValidateMarketOrderAsync(MarketOr
         }
     }
 
+    if (settings.MaxLossPerTrade > 0 && request.AttachProtection == true && request.ProtectionDistance is > 0 && contracts is > 0 && !string.IsNullOrWhiteSpace(symbol))
+    {
+        var estimatedLoss = request.ProtectionDistance.Value * contracts.Value * GetPointValue(symbol);
+        if (estimatedLoss > settings.MaxLossPerTrade)
+        {
+            errors.Add($"Estimated loss {estimatedLoss:0.##} exceeds max loss per trade {settings.MaxLossPerTrade:0.##}");
+        }
+    }
+
     return new MarketOrderValidationResult(symbol, direction, contracts, errors);
+}
+
+static decimal GetPointValue(string symbol)
+{
+    var normalized = symbol.Trim().ToUpperInvariant().Replace("1!", "", StringComparison.OrdinalIgnoreCase);
+    return normalized switch
+    {
+        "MNQ" => 2m,
+        "NQ" => 20m,
+        "MES" => 5m,
+        "ES" => 50m,
+        _ => 1m
+    };
 }
 
 static async Task<IResult> ProcessSignalAsync(TradingSignalRequest request, bool isManualTrade, TradingDbContext db, IBrokerAdapter brokerAdapter, RiskValidator riskValidator, IHubContext<TradingHub> hub)

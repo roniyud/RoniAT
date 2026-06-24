@@ -468,6 +468,8 @@ async function handleSaveRiskSettings() {
       ...riskForm.value,
       allowed_symbols: normalizeSymbols(symbolsInput.value),
       max_contracts_per_signal: Number(riskForm.value.max_contracts_per_signal),
+      max_loss_per_trade: Number(riskForm.value.max_loss_per_trade),
+      max_daily_loss: Number(riskForm.value.max_daily_loss),
       duplicate_window_seconds: Number(riskForm.value.duplicate_window_seconds),
     })
 
@@ -1432,10 +1434,26 @@ watch(activeTab, (tab) => {
 
           <label class="toggle-row">
             <span>
+              <strong>Test Mode</strong>
+              <small>{{ riskForm.test_mode ? 'Enabled' : 'Disabled' }}</small>
+            </span>
+            <input v-model="riskForm.test_mode" type="checkbox" />
+          </label>
+
+          <label class="toggle-row">
+            <span>
               <strong>Reject Duplicate Signals</strong>
               <small>{{ riskForm.reject_duplicate_signals ? 'Enabled' : 'Disabled' }}</small>
             </span>
             <input v-model="riskForm.reject_duplicate_signals" type="checkbox" />
+          </label>
+
+          <label class="toggle-row">
+            <span>
+              <strong>Ignore TP2</strong>
+              <small>{{ riskForm.ignore_tp2 ? 'TP2 ignored by default' : 'TP2 active' }}</small>
+            </span>
+            <input v-model="riskForm.ignore_tp2" type="checkbox" />
           </label>
 
           <label class="toggle-row">
@@ -1466,6 +1484,14 @@ watch(activeTab, (tab) => {
             <label>
               <span>Max Contracts</span>
               <input v-model.number="riskForm.max_contracts_per_signal" type="number" min="1" max="100" />
+            </label>
+            <label>
+              <span>Max Loss Per Trade</span>
+              <input v-model.number="riskForm.max_loss_per_trade" type="number" min="0" step="1" />
+            </label>
+            <label>
+              <span>Max Daily Loss</span>
+              <input v-model.number="riskForm.max_daily_loss" type="number" min="0" step="1" />
             </label>
             <label>
               <span>Duplicate Window Seconds</span>

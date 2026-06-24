@@ -6,6 +6,7 @@ namespace RoniAT.TradingEngine.Services;
 
 public sealed class IBKRBrokerAdapter(
     BrokerSettingsStore settingsStore,
+    RiskSettingsStore riskSettingsStore,
     BrokerConnectionStateStore connectionStateStore,
     IBKRConnectionSession connectionSession) : IBrokerAdapter
 {
@@ -471,8 +472,9 @@ public sealed class IBKRBrokerAdapter(
         return "working";
     }
 
-    private static async Task UpsertPositionAsync(TradingSignalRecord signal, decimal fillPrice, TradingDbContext db, DateTimeOffset now)
+    private async Task UpsertPositionAsync(TradingSignalRecord signal, decimal fillPrice, TradingDbContext db, DateTimeOffset now)
     {
+        var ignoreTakeProfit2 = riskSettingsStore.Get().IgnoreTakeProfit2;
         var existing = await db.Positions.SingleOrDefaultAsync(position => position.Symbol == signal.Symbol);
         if (existing is null)
         {
@@ -484,7 +486,7 @@ public sealed class IBKRBrokerAdapter(
                 AveragePrice = fillPrice,
                 StopLoss = signal.StopLoss,
                 TakeProfit1 = signal.TakeProfit1,
-                TakeProfit2 = signal.TakeProfit2,
+                TakeProfit2 = ignoreTakeProfit2 ? null : signal.TakeProfit2,
                 OpenedAt = now,
                 UpdatedAt = now
             });
@@ -507,7 +509,7 @@ public sealed class IBKRBrokerAdapter(
 
         existing.StopLoss = signal.StopLoss;
         existing.TakeProfit1 = signal.TakeProfit1;
-        existing.TakeProfit2 = signal.TakeProfit2;
+        existing.TakeProfit2 = ignoreTakeProfit2 ? null : signal.TakeProfit2;
         existing.UpdatedAt = now;
     }
 

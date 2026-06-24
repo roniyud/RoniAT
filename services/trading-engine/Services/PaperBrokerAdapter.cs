@@ -4,7 +4,7 @@ using RoniAT.TradingEngine.Models;
 
 namespace RoniAT.TradingEngine.Services;
 
-public sealed class PaperBrokerAdapter : IBrokerAdapter
+public sealed class PaperBrokerAdapter(RiskSettingsStore riskSettingsStore) : IBrokerAdapter
 {
     public string Name => "Paper";
 
@@ -24,7 +24,10 @@ public sealed class PaperBrokerAdapter : IBrokerAdapter
     {
         var now = DateTimeOffset.UtcNow;
         var exitDirection = signal.Direction == "LONG" ? "SHORT" : "LONG";
-        var targetAllocation = SplitTargets(signal.Contracts);
+        var ignoreTakeProfit2 = riskSettingsStore.Get().IgnoreTakeProfit2;
+        var targetAllocation = ignoreTakeProfit2
+            ? new TargetAllocation(signal.Contracts, 0)
+            : SplitTargets(signal.Contracts);
 
         db.Orders.Add(new OrderRecord
         {
@@ -68,19 +71,22 @@ public sealed class PaperBrokerAdapter : IBrokerAdapter
             UpdatedAt = now
         });
 
-        db.Orders.Add(new OrderRecord
+        if (!ignoreTakeProfit2)
         {
-            SignalId = signal.Id,
-            BrokerOrderId = BuildBrokerOrderId(signal.Id, "TP2"),
-            Symbol = signal.Symbol,
-            Direction = exitDirection,
-            OrderType = "paper_take_profit_2",
-            Quantity = targetAllocation.TakeProfit2,
-            Price = signal.TakeProfit2,
-            Status = "working",
-            CreatedAt = now,
-            UpdatedAt = now
-        });
+            db.Orders.Add(new OrderRecord
+            {
+                SignalId = signal.Id,
+                BrokerOrderId = BuildBrokerOrderId(signal.Id, "TP2"),
+                Symbol = signal.Symbol,
+                Direction = exitDirection,
+                OrderType = "paper_take_profit_2",
+                Quantity = targetAllocation.TakeProfit2,
+                Price = signal.TakeProfit2,
+                Status = "working",
+                CreatedAt = now,
+                UpdatedAt = now
+            });
+        }
 
         db.Executions.Add(new ExecutionRecord
         {
@@ -363,8 +369,9 @@ public sealed class PaperBrokerAdapter : IBrokerAdapter
         return null;
     }
 
-    private static async Task UpsertPositionAsync(TradingSignalRecord signal, TradingDbContext db, DateTimeOffset now)
+    private async Task UpsertPositionAsync(TradingSignalRecord signal, TradingDbContext db, DateTimeOffset now)
     {
+        var ignoreTakeProfit2 = riskSettingsStore.Get().IgnoreTakeProfit2;
         var existing = await db.Positions.SingleOrDefaultAsync(position => position.Symbol == signal.Symbol);
         if (existing is null)
         {
@@ -376,7 +383,7 @@ public sealed class PaperBrokerAdapter : IBrokerAdapter
                 AveragePrice = signal.EntryPrice,
                 StopLoss = signal.StopLoss,
                 TakeProfit1 = signal.TakeProfit1,
-                TakeProfit2 = signal.TakeProfit2,
+                TakeProfit2 = ignoreTakeProfit2 ? null : signal.TakeProfit2,
                 OpenedAt = now,
                 UpdatedAt = now
             });
@@ -399,7 +406,7 @@ public sealed class PaperBrokerAdapter : IBrokerAdapter
 
         existing.StopLoss = signal.StopLoss;
         existing.TakeProfit1 = signal.TakeProfit1;
-        existing.TakeProfit2 = signal.TakeProfit2;
+        existing.TakeProfit2 = ignoreTakeProfit2 ? null : signal.TakeProfit2;
         existing.UpdatedAt = now;
     }
 

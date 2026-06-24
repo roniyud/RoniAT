@@ -131,7 +131,11 @@ export type BrokerSettings = {
 
 export type RiskSettings = {
   max_contracts_per_signal: number
+  max_loss_per_trade: number
+  max_daily_loss: number
   allowed_symbols: string[]
+  test_mode: boolean
+  ignore_tp2: boolean
   enable_auto_trading: boolean
   reject_duplicate_signals: boolean
   duplicate_window_seconds: number

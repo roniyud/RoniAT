@@ -35,6 +35,15 @@ public sealed class RiskValidator(RiskSettingsStore settingsStore)
             reasons.Add($"Contracts {signal.Contracts} exceeds max {settings.MaxContractsPerSignal}");
         }
 
+        if (settings.MaxLossPerTrade > 0)
+        {
+            var estimatedLoss = Math.Abs(signal.EntryPrice - signal.StopLoss) * signal.Contracts * GetPointValue(signal.Symbol);
+            if (estimatedLoss > settings.MaxLossPerTrade)
+            {
+                reasons.Add($"Estimated loss {estimatedLoss:0.##} exceeds max loss per trade {settings.MaxLossPerTrade:0.##}");
+            }
+        }
+
         var allowedSymbols = settings.AllowedSymbols
             .Where(symbol => !string.IsNullOrWhiteSpace(symbol))
             .Select(symbol => symbol.Trim().ToUpperInvariant())
@@ -85,6 +94,19 @@ public sealed class RiskValidator(RiskSettingsStore settingsStore)
         return reasons.Count == 0
             ? RiskValidationResult.Approved
             : new RiskValidationResult(false, reasons);
+    }
+
+    private static decimal GetPointValue(string symbol)
+    {
+        var normalized = symbol.Trim().ToUpperInvariant().Replace("1!", "", StringComparison.OrdinalIgnoreCase);
+        return normalized switch
+        {
+            "MNQ" => 2m,
+            "NQ" => 20m,
+            "MES" => 5m,
+            "ES" => 50m,
+            _ => 1m
+        };
     }
 }
 

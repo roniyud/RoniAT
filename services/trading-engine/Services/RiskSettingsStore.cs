@@ -84,7 +84,11 @@ public sealed class RiskSettingsStore
         return new RiskSettings
         {
             MaxContractsPerSignal = settings.MaxContractsPerSignal,
+            MaxLossPerTrade = settings.MaxLossPerTrade,
+            MaxDailyLoss = settings.MaxDailyLoss,
             AllowedSymbols = allowedSymbols,
+            TestMode = settings.TestMode,
+            IgnoreTakeProfit2 = settings.IgnoreTakeProfit2,
             EnableAutoTrading = settings.EnableAutoTrading,
             RejectDuplicateSignals = settings.RejectDuplicateSignals,
             DuplicateWindowSeconds = settings.DuplicateWindowSeconds,
@@ -101,6 +105,16 @@ public sealed class RiskSettingsStore
         if (settings.MaxContractsPerSignal is < 1 or > 100)
         {
             errors.Add("max_contracts_per_signal must be between 1 and 100");
+        }
+
+        if (settings.MaxLossPerTrade is < 0 or > 1_000_000)
+        {
+            errors.Add("max_loss_per_trade must be between 0 and 1000000");
+        }
+
+        if (settings.MaxDailyLoss is < 0 or > 1_000_000)
+        {
+            errors.Add("max_daily_loss must be between 0 and 1000000");
         }
 
         if (settings.AllowedSymbols.Length == 0)
@@ -121,7 +135,11 @@ public sealed class RiskSettingsStore
         return new RiskSettings
         {
             MaxContractsPerSignal = settings.MaxContractsPerSignal,
+            MaxLossPerTrade = settings.MaxLossPerTrade,
+            MaxDailyLoss = settings.MaxDailyLoss,
             AllowedSymbols = settings.AllowedSymbols.ToArray(),
+            TestMode = settings.TestMode,
+            IgnoreTakeProfit2 = settings.IgnoreTakeProfit2,
             EnableAutoTrading = settings.EnableAutoTrading,
             RejectDuplicateSignals = settings.RejectDuplicateSignals,
             DuplicateWindowSeconds = settings.DuplicateWindowSeconds,
