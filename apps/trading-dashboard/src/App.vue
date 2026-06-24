@@ -423,6 +423,17 @@ async function handleFlatten() {
 }
 
 async function handleProtectionDrag(field: 'stop_loss' | 'take_profit', price: number) {
+  if (chartMarketDataWarning.value) {
+    tradeMessage.value = 'Protection drag is disabled while chart uses simulated fallback data'
+    return
+  }
+
+  const label = field === 'stop_loss' ? 'SL' : 'TP'
+  if (requireChartTradeConfirmation.value && !window.confirm(`Update ${label} for ${chartSymbol.value} to ${formatPrice(price)}? This will replace the working broker protection orders.`)) {
+    tradeMessage.value = `${label} update cancelled`
+    return
+  }
+
   activeAction.value = `protection-${field}`
   errorMessage.value = ''
   tradeMessage.value = ''
@@ -435,7 +446,7 @@ async function handleProtectionDrag(field: 'stop_loss' | 'take_profit', price: n
     })
 
     tradeMessage.value = result.ok
-      ? `${field === 'stop_loss' ? 'SL' : 'TP'} updated to ${formatPrice(price)}`
+      ? `${label} updated to ${formatPrice(price)}`
       : `Protection update failed: ${result.message}`
     await refreshData()
   } catch (error) {

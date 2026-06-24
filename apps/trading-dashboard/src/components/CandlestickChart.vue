@@ -77,7 +77,10 @@ let priceLines: IPriceLine[] = []
 let resizeObserver: ResizeObserver | null = null
 let hasFitInitialData = false
 let dragTarget: ChartPriceLevel['draggable'] | null = null
+let dragTargetLabel = ''
+let dragTargetColor = ''
 let lastDragPrice: number | null = null
+let previewPriceLine: IPriceLine | null = null
 
 const latestCandle = computed(() => props.candles.at(-1))
 const formattedSymbol = computed(() => props.symbol.trim().toUpperCase())
@@ -146,6 +149,26 @@ function syncPriceLines() {
     )
 }
 
+function removePreviewPriceLine() {
+  if (!candleSeries || !previewPriceLine) return
+  candleSeries.removePriceLine(previewPriceLine)
+  previewPriceLine = null
+}
+
+function syncPreviewPriceLine() {
+  if (!candleSeries || !dragTarget || lastDragPrice == null) return
+
+  removePreviewPriceLine()
+  previewPriceLine = candleSeries.createPriceLine({
+    price: lastDragPrice,
+    color: dragTargetColor || '#0f766e',
+    lineWidth: 3,
+    lineStyle: LineStyle.Solid,
+    axisLabelVisible: true,
+    title: `${dragTargetLabel} ${lastDragPrice.toFixed(2)}`,
+  })
+}
+
 function getPriceFromPointer(event: MouseEvent) {
   if (!chartContainer.value || !candleSeries) return null
   const bounds = chartContainer.value.getBoundingClientRect()
@@ -161,7 +184,7 @@ function findDraggableLevelAtPrice(price: number) {
     const coordinate = candleSeries.priceToCoordinate(level.price)
     const pointerCoordinate = candleSeries.priceToCoordinate(price)
     if (coordinate == null || pointerCoordinate == null) continue
-    if (Math.abs(coordinate - pointerCoordinate) <= 10) return level.draggable ?? null
+    if (Math.abs(coordinate - pointerCoordinate) <= 10) return level
   }
 
   return null
@@ -173,13 +196,18 @@ function handlePointerDown(event: MouseEvent) {
   const price = getPriceFromPointer(event)
   if (price == null) return
 
-  const target = findDraggableLevelAtPrice(price)
-  if (!target) return
+  const targetLevel = findDraggableLevelAtPrice(price)
+  if (!targetLevel?.draggable) return
 
-  dragTarget = target
-  lastDragPrice = price
+  dragTarget = targetLevel.draggable
+  dragTargetLabel = targetLevel.label
+  dragTargetColor = targetLevel.color
+  lastDragPrice = Math.round(price * 4) / 4
+  chart?.applyOptions({ handleScroll: false, handleScale: false })
   chartContainer.value?.classList.add('dragging-protection')
+  syncPreviewPriceLine()
   event.preventDefault()
+  event.stopPropagation()
 }
 
 function handlePointerMove(event: MouseEvent) {
@@ -188,17 +216,25 @@ function handlePointerMove(event: MouseEvent) {
   if (price == null) return
 
   lastDragPrice = Math.round(price * 4) / 4
+  syncPreviewPriceLine()
   event.preventDefault()
+  event.stopPropagation()
 }
 
-function finishProtectionDrag() {
+function finishProtectionDrag(event?: MouseEvent) {
   if (dragTarget && lastDragPrice != null) {
     emit('protectionDrag', dragTarget, lastDragPrice)
   }
 
+  removePreviewPriceLine()
+  chart?.applyOptions({ handleScroll: true, handleScale: true })
   dragTarget = null
+  dragTargetLabel = ''
+  dragTargetColor = ''
   lastDragPrice = null
   chartContainer.value?.classList.remove('dragging-protection')
+  event?.preventDefault()
+  event?.stopPropagation()
 }
 
 function renderChart() {
@@ -247,7 +283,7 @@ function renderChart() {
     chart?.applyOptions({ autoSize: true })
   })
   resizeObserver.observe(chartContainer.value)
-  chartContainer.value.addEventListener('mousedown', handlePointerDown)
+  chartContainer.value.addEventListener('mousedown', handlePointerDown, true)
   window.addEventListener('mousemove', handlePointerMove)
   window.addEventListener('mouseup', finishProtectionDrag)
 }
@@ -277,6 +313,7 @@ watch(
   () => props.levels,
   () => {
     syncPriceLines()
+    syncPreviewPriceLine()
   },
   { deep: true },
 )
@@ -287,7 +324,7 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
-  chartContainer.value?.removeEventListener('mousedown', handlePointerDown)
+  chartContainer.value?.removeEventListener('mousedown', handlePointerDown, true)
   window.removeEventListener('mousemove', handlePointerMove)
   window.removeEventListener('mouseup', finishProtectionDrag)
   resizeObserver?.disconnect()
