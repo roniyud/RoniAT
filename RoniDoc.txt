@@ -1,4 +1,44 @@
+
+
+http://localhost:5066/swagger
+
+http://localhost:5173/
+
+
+הוסיף בחירת מחיר מהגרף.
+אחר כך draggable SL/TP.
+
+
+7497
+
+
+
+בונה את הדשבורד
+cd D:\RONI\RoniAT\apps\trading-dashboard
+npm run build
+
+מפעיל את הוואטצאפ
+cd D:\RONI\RoniAT\apps\whatsapp-listener
+$env:TRADING_ENGINE_URL='http://localhost:3001'
+$env:TRADING_ENGINE_USERNAME='admin'
+$env:TRADING_ENGINE_PASSWORD='Roni5324!'
+npm start
+
+מפעיל את המערכת
 cd D:\RONI\RoniAT\services\trading-engine
 dotnet run
 
-http://localhost:5066/swagger
+מפעיל את הדשבורד
+cd D:\RONI\RoniAT\apps\trading-dashboard
+npm run dev -- --host 0.0.0.0
+
+
+
+פיתוח
+cd D:\RONI\RoniAT
+.\scripts\start-roniat.local.ps1 -RestartTradingEngine -WithWhatsApp
+
+פרודקשן
+cd D:\RONI\RoniAT
+.\scripts\start-roniat.local.ps1 -RestartTradingEngine -PublicDashboard -WithWhatsApp
+
