@@ -872,17 +872,17 @@ watch(activeTab, (tab) => {
         </div>
       </article>
       <article class="metric-tile">
-        <Activity :size="20" />
-        <div>
-          <span>Working Orders</span>
-          <strong>{{ workingOrderCount }}</strong>
-        </div>
-      </article>
-      <article class="metric-tile">
         <BriefcaseBusiness :size="20" />
         <div>
           <span>Open Position Qty</span>
           <strong>{{ totalOpenQuantity }}</strong>
+        </div>
+      </article>
+      <article class="metric-tile">
+        <Activity :size="20" />
+        <div>
+          <span>Working Orders</span>
+          <strong>{{ workingOrderCount }}</strong>
         </div>
       </article>
       <article class="metric-tile">
@@ -1289,92 +1289,120 @@ watch(activeTab, (tab) => {
             </button>
           </div>
 
-          <div class="side-control">
+          <div class="broker-environment-tabs" role="tablist" aria-label="IBKR environment settings">
             <button
               type="button"
+              role="tab"
+              :aria-selected="brokerForm.ibkr_environment === 'Paper'"
               :class="{ active: brokerForm.ibkr_environment === 'Paper' }"
               @click="brokerForm.ibkr_environment = 'Paper'"
             >
-              IBKR PAPER
+              Paper
             </button>
             <button
               type="button"
+              role="tab"
+              :aria-selected="brokerForm.ibkr_environment === 'Live'"
               :class="{ active: brokerForm.ibkr_environment === 'Live' }"
               @click="brokerForm.ibkr_environment = 'Live'"
             >
-              IBKR LIVE
+              Live
             </button>
           </div>
 
-          <div class="settings-grid">
-            <label>
-              <span>Paper Gateway Host</span>
-              <input v-model="brokerForm.ibkr_paper.host" type="text" autocomplete="off" spellcheck="false" />
-            </label>
-            <label>
-              <span>Paper Gateway Port</span>
-              <input v-model.number="brokerForm.ibkr_paper.port" type="number" min="1" max="65535" />
-            </label>
-            <label>
-              <span>Paper Client ID</span>
-              <input v-model.number="brokerForm.ibkr_paper.client_id" type="number" min="1" />
-            </label>
-            <label>
-              <span>Paper Account</span>
-              <input v-model="brokerForm.ibkr_paper.account" type="text" autocomplete="off" spellcheck="false" />
-            </label>
-          </div>
+          <section v-if="brokerForm.ibkr_environment === 'Paper'" class="broker-environment-panel" role="tabpanel">
+            <div class="broker-environment-heading">
+              <div>
+                <span>Selected Environment</span>
+                <strong>IBKR Paper</strong>
+              </div>
+              <span class="status-pill" :class="brokerForm.ibkr_paper.enabled ? 'paper-position-opened' : 'rejected-by-risk'">
+                {{ brokerForm.ibkr_paper.enabled ? 'Enabled' : 'Disabled' }}
+              </span>
+            </div>
 
-          <div class="settings-grid">
-            <label>
-              <span>Live Gateway Host</span>
-              <input v-model="brokerForm.ibkr_live.host" type="text" autocomplete="off" spellcheck="false" />
-            </label>
-            <label>
-              <span>Live Gateway Port</span>
-              <input v-model.number="brokerForm.ibkr_live.port" type="number" min="1" max="65535" />
-            </label>
-            <label>
-              <span>Live Client ID</span>
-              <input v-model.number="brokerForm.ibkr_live.client_id" type="number" min="1" />
-            </label>
-            <label>
-              <span>Live Account</span>
-              <input v-model="brokerForm.ibkr_live.account" type="text" autocomplete="off" spellcheck="false" />
-            </label>
-          </div>
+            <div class="settings-grid">
+              <label>
+                <span>Gateway Host</span>
+                <input v-model="brokerForm.ibkr_paper.host" type="text" autocomplete="off" spellcheck="false" />
+              </label>
+              <label>
+                <span>Gateway Port</span>
+                <input v-model.number="brokerForm.ibkr_paper.port" type="number" min="1" max="65535" />
+              </label>
+              <label>
+                <span>Client ID</span>
+                <input v-model.number="brokerForm.ibkr_paper.client_id" type="number" min="1" />
+              </label>
+              <label>
+                <span>Paper Account</span>
+                <input v-model="brokerForm.ibkr_paper.account" type="text" autocomplete="off" spellcheck="false" />
+              </label>
+            </div>
 
-          <label class="toggle-row">
-            <span>
-              <strong>Enable IBKR Paper</strong>
-              <small>{{ brokerForm.ibkr_paper.enabled ? 'Enabled' : 'Disabled' }}</small>
-            </span>
-            <input v-model="brokerForm.ibkr_paper.enabled" type="checkbox" />
-          </label>
+            <label class="toggle-row">
+              <span>
+                <strong>Enable IBKR Paper</strong>
+                <small>{{ brokerForm.ibkr_paper.enabled ? 'Enabled' : 'Disabled' }}</small>
+              </span>
+              <input v-model="brokerForm.ibkr_paper.enabled" type="checkbox" />
+            </label>
 
-          <label class="toggle-row">
-            <span>
-              <strong>RoniAT Paper Order Lock</strong>
-              <small>{{ brokerForm.ibkr_paper.read_only ? 'Blocks order placement from RoniAT' : 'RoniAT can send Paper orders' }}</small>
-            </span>
-            <input v-model="brokerForm.ibkr_paper.read_only" type="checkbox" />
-          </label>
+            <label class="toggle-row">
+              <span>
+                <strong>RoniAT Paper Order Lock</strong>
+                <small>{{ brokerForm.ibkr_paper.read_only ? 'Blocks order placement from RoniAT' : 'RoniAT can send Paper orders' }}</small>
+              </span>
+              <input v-model="brokerForm.ibkr_paper.read_only" type="checkbox" />
+            </label>
+          </section>
 
-          <label class="toggle-row">
-            <span>
-              <strong>Enable IBKR Live</strong>
-              <small>{{ brokerForm.ibkr_live.enabled ? 'Enabled' : 'Disabled' }}</small>
-            </span>
-            <input v-model="brokerForm.ibkr_live.enabled" type="checkbox" />
-          </label>
+          <section v-else class="broker-environment-panel live" role="tabpanel">
+            <div class="broker-environment-heading">
+              <div>
+                <span>Selected Environment</span>
+                <strong>IBKR Live</strong>
+              </div>
+              <span class="status-pill" :class="brokerForm.ibkr_live.enabled ? 'paper-position-opened' : 'rejected-by-risk'">
+                {{ brokerForm.ibkr_live.enabled ? 'Enabled' : 'Disabled' }}
+              </span>
+            </div>
 
-          <label class="toggle-row">
-            <span>
-              <strong>Live Read Only</strong>
-              <small>{{ brokerForm.ibkr_live.read_only ? 'Read only' : 'Order capable later' }}</small>
-            </span>
-            <input v-model="brokerForm.ibkr_live.read_only" type="checkbox" />
-          </label>
+            <div class="settings-grid">
+              <label>
+                <span>Gateway Host</span>
+                <input v-model="brokerForm.ibkr_live.host" type="text" autocomplete="off" spellcheck="false" />
+              </label>
+              <label>
+                <span>Gateway Port</span>
+                <input v-model.number="brokerForm.ibkr_live.port" type="number" min="1" max="65535" />
+              </label>
+              <label>
+                <span>Client ID</span>
+                <input v-model.number="brokerForm.ibkr_live.client_id" type="number" min="1" />
+              </label>
+              <label>
+                <span>Live Account</span>
+                <input v-model="brokerForm.ibkr_live.account" type="text" autocomplete="off" spellcheck="false" />
+              </label>
+            </div>
+
+            <label class="toggle-row">
+              <span>
+                <strong>Enable IBKR Live</strong>
+                <small>{{ brokerForm.ibkr_live.enabled ? 'Enabled' : 'Disabled' }}</small>
+              </span>
+              <input v-model="brokerForm.ibkr_live.enabled" type="checkbox" />
+            </label>
+
+            <label class="toggle-row">
+              <span>
+                <strong>Live Read Only</strong>
+                <small>{{ brokerForm.ibkr_live.read_only ? 'Read only' : 'Order capable later' }}</small>
+              </span>
+              <input v-model="brokerForm.ibkr_live.read_only" type="checkbox" />
+            </label>
+          </section>
 
           <div class="settings-actions">
             <span class="save-message">{{ brokerSaveMessage }}</span>
