@@ -7,6 +7,7 @@ namespace RoniAT.TradingEngine.Services;
 public sealed class IBKRBrokerAdapter(
     BrokerSettingsStore settingsStore,
     RiskSettingsStore riskSettingsStore,
+    DailyPerformanceStore dailyPerformanceStore,
     BrokerConnectionStateStore connectionStateStore,
     IBKRConnectionSession connectionSession) : IBrokerAdapter
 {
@@ -515,7 +516,7 @@ public sealed class IBKRBrokerAdapter(
         existing.UpdatedAt = now;
     }
 
-    private static async Task<PositionRecord?> UpsertMarketPositionAsync(string symbol, string direction, int contracts, decimal fillPrice, TradingDbContext db, DateTimeOffset now)
+    private async Task<PositionRecord?> UpsertMarketPositionAsync(string symbol, string direction, int contracts, decimal fillPrice, TradingDbContext db, DateTimeOffset now)
     {
         var existing = await db.Positions.SingleOrDefaultAsync(position => position.Symbol == symbol);
         if (existing is null)
@@ -541,15 +542,18 @@ public sealed class IBKRBrokerAdapter(
         }
         else if (contracts < existing.Quantity)
         {
+            dailyPerformanceStore.AddRealizedPnl(CalculateRealizedPnl(existing, fillPrice, contracts));
             existing.Quantity -= contracts;
         }
         else if (contracts == existing.Quantity)
         {
+            dailyPerformanceStore.AddRealizedPnl(CalculateRealizedPnl(existing, fillPrice, contracts));
             db.Positions.Remove(existing);
             return null;
         }
         else
         {
+            dailyPerformanceStore.AddRealizedPnl(CalculateRealizedPnl(existing, fillPrice, existing.Quantity));
             existing.Quantity = contracts - existing.Quantity;
             existing.Direction = direction;
             existing.AveragePrice = fillPrice;
@@ -566,5 +570,24 @@ public sealed class IBKRBrokerAdapter(
     private static string EscapeJson(string value)
     {
         return value.Replace("\\", "\\\\").Replace("\"", "\\\"");
+    }
+
+    private static decimal CalculateRealizedPnl(PositionRecord position, decimal exitPrice, int closedQuantity)
+    {
+        var directionMultiplier = position.Direction == "LONG" ? 1m : -1m;
+        return (exitPrice - position.AveragePrice) * directionMultiplier * closedQuantity * GetPointValue(position.Symbol);
+    }
+
+    private static decimal GetPointValue(string symbol)
+    {
+        var normalized = symbol.Trim().ToUpperInvariant().Replace("1!", "", StringComparison.OrdinalIgnoreCase);
+        return normalized switch
+        {
+            "MNQ" => 2m,
+            "NQ" => 20m,
+            "MES" => 5m,
+            "ES" => 50m,
+            _ => 1m
+        };
     }
 }

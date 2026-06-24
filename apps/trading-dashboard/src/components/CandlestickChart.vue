@@ -39,6 +39,12 @@ type ChartTradeSettings = {
   contracts: number
 }
 
+type DailyPerformance = {
+  date: string
+  realized_pnl: number
+  closed_trades: number
+}
+
 const props = defineProps<{
   activeTrade: ActiveTrade | null
   availableSymbols: string[]
@@ -48,6 +54,7 @@ const props = defineProps<{
   chartTradeMessage: string
   chartTradeSettings: ChartTradeSettings
   chartWorkingOrderCount: number
+  dailyPerformance: DailyPerformance | null
   errorMessage: string
   isSubmittingTrade: boolean
   isLoading: boolean
@@ -87,6 +94,11 @@ const formattedSymbol = computed(() => props.symbol.trim().toUpperCase())
 const tradePnlClass = computed(() => {
   if (props.activeTrade?.estimatedPnl == null) return ''
   return props.activeTrade.estimatedPnl >= 0 ? 'positive' : 'negative'
+})
+const dailyPnlClass = computed(() => {
+  const pnl = props.dailyPerformance?.realized_pnl
+  if (pnl == null || pnl === 0) return ''
+  return pnl > 0 ? 'positive' : 'negative'
 })
 
 function formatPrice(value: number | null | undefined) {
@@ -408,6 +420,21 @@ onUnmounted(() => {
           <span>Working Orders</span>
           <strong>{{ activeTrade.workingOrders }}</strong>
         </div>
+      </div>
+    </section>
+
+    <section class="daily-performance-strip">
+      <div>
+        <span>Daily P&L</span>
+        <strong :class="dailyPnlClass">{{ formatCurrency(dailyPerformance?.realized_pnl) }}</strong>
+      </div>
+      <div>
+        <span>Closed Trades</span>
+        <strong>{{ dailyPerformance?.closed_trades ?? 0 }}</strong>
+      </div>
+      <div>
+        <span>Date</span>
+        <strong>{{ dailyPerformance?.date ?? '-' }}</strong>
       </div>
     </section>
 

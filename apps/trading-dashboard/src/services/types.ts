@@ -88,6 +88,12 @@ export type PaperActionResult = {
   closedPositions: number
 }
 
+export type DailyPerformance = {
+  date: string
+  realized_pnl: number
+  closed_trades: number
+}
+
 export type BrokerMode = {
   mode: string
   environment: string

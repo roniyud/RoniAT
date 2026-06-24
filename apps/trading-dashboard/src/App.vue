@@ -23,6 +23,7 @@ import {
   emergencyStop,
   flattenPaperAccount,
   getAuditLogs,
+  getDailyPerformance,
   getBrokerSettings,
   getBrokerMode,
   getHealth,
@@ -42,7 +43,7 @@ import {
 import { getCandles, type Timeframe } from './services/market-data'
 import type { CandlestickData, UTCTimestamp } from 'lightweight-charts'
 import { createTradingRealtimeClient, type MarketTick, type RealtimeStatus, type TradingUpdate } from './services/realtime'
-import type { ApiState, AuditLogRecord, BrokerConnectionTestResult, BrokerMode, BrokerSettings, IBKRSettings, MarketOrderResponse, OrderRecord, PositionRecord, RiskSettings, TradingSignal, TradingSignalRequest } from './services/types'
+import type { ApiState, AuditLogRecord, BrokerConnectionTestResult, BrokerMode, BrokerSettings, DailyPerformance, IBKRSettings, MarketOrderResponse, OrderRecord, PositionRecord, RiskSettings, TradingSignal, TradingSignalRequest } from './services/types'
 
 const apiState = ref<ApiState>('loading')
 const activeTab = ref<'chart' | 'trade' | 'signals' | 'orders' | 'positions' | 'audit' | 'settings'>('chart')
@@ -50,6 +51,7 @@ const signals = ref<TradingSignal[]>([])
 const orders = ref<OrderRecord[]>([])
 const positions = ref<PositionRecord[]>([])
 const auditLogs = ref<AuditLogRecord[]>([])
+const dailyPerformance = ref<DailyPerformance | null>(null)
 const riskSettings = ref<RiskSettings | null>(null)
 const riskForm = ref<RiskSettings | null>(null)
 const brokerStatus = ref<BrokerMode | null>(null)
@@ -251,11 +253,12 @@ async function refreshData() {
 
   try {
     await getHealth()
-    const [nextSignals, nextOrders, nextPositions, nextAuditLogs, nextRiskSettings, nextBrokerMode, nextBrokerSettings] = await Promise.all([
+    const [nextSignals, nextOrders, nextPositions, nextAuditLogs, nextDailyPerformance, nextRiskSettings, nextBrokerMode, nextBrokerSettings] = await Promise.all([
       getSignals(),
       getOrders(),
       getPositions(),
       getAuditLogs(),
+      getDailyPerformance(),
       getRiskSettings(),
       getBrokerMode(),
       getBrokerSettings(),
@@ -265,6 +268,7 @@ async function refreshData() {
     orders.value = nextOrders
     positions.value = nextPositions
     auditLogs.value = nextAuditLogs
+    dailyPerformance.value = nextDailyPerformance
     riskSettings.value = nextRiskSettings
     brokerStatus.value = nextBrokerMode
     brokerSettings.value = nextBrokerSettings
@@ -953,6 +957,7 @@ watch(activeTab, (tab) => {
         :chart-trade-message="tradeMessage"
         :chart-trade-settings="manualTrade"
         :chart-working-order-count="chartWorkingOrderCount"
+        :daily-performance="dailyPerformance"
         :error-message="chartError"
         :market-data-warning="chartMarketDataWarning"
         :is-submitting-trade="isSubmittingTrade"

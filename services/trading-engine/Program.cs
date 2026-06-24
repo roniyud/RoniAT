@@ -55,6 +55,7 @@ builder.Services.PostConfigure<RiskSettings>(settings =>
     }
 });
 builder.Services.AddSingleton<RiskSettingsStore>();
+builder.Services.AddSingleton<DailyPerformanceStore>();
 builder.Services.AddScoped<RiskValidator>();
 builder.Services.Configure<BrokerSettings>(options =>
 {
@@ -125,8 +126,8 @@ app.MapPost("/api/manual-trades", async (TradingSignalRequest request, TradingDb
 .WithName("CreateManualTrade")
 .WithOpenApi();
 
-app.MapPost("/api/market-orders", async (MarketOrderRequest request, TradingDbContext db, IBrokerAdapter brokerAdapter, RiskSettingsStore riskSettingsStore, IHubContext<TradingHub> hub) =>
-    await ProcessMarketOrderAsync(request, db, brokerAdapter, riskSettingsStore, hub))
+app.MapPost("/api/market-orders", async (MarketOrderRequest request, TradingDbContext db, IBrokerAdapter brokerAdapter, RiskSettingsStore riskSettingsStore, DailyPerformanceStore dailyPerformanceStore, IHubContext<TradingHub> hub) =>
+    await ProcessMarketOrderAsync(request, db, brokerAdapter, riskSettingsStore, dailyPerformanceStore, hub))
 .WithName("CreateMarketOrder")
 .WithOpenApi();
 
@@ -199,6 +200,19 @@ app.MapGet("/api/audit-logs", async (TradingDbContext db) =>
     return Results.Ok(auditLogs);
 })
 .WithName("GetAuditLogs")
+.WithOpenApi();
+
+app.MapGet("/api/performance/daily", (DailyPerformanceStore dailyPerformanceStore) =>
+{
+    var snapshot = dailyPerformanceStore.GetToday();
+    return Results.Ok(new
+    {
+        date = snapshot.Date.ToString("yyyy-MM-dd"),
+        realized_pnl = snapshot.RealizedPnl,
+        closed_trades = snapshot.ClosedTrades
+    });
+})
+.WithName("GetDailyPerformance")
 .WithOpenApi();
 
 app.MapGet("/api/market-data/candles", async (
@@ -571,9 +585,9 @@ static Task BroadcastTradingUpdateAsync(IHubContext<TradingHub> hub, string even
     });
 }
 
-static async Task<IResult> ProcessMarketOrderAsync(MarketOrderRequest request, TradingDbContext db, IBrokerAdapter brokerAdapter, RiskSettingsStore riskSettingsStore, IHubContext<TradingHub> hub)
+static async Task<IResult> ProcessMarketOrderAsync(MarketOrderRequest request, TradingDbContext db, IBrokerAdapter brokerAdapter, RiskSettingsStore riskSettingsStore, DailyPerformanceStore dailyPerformanceStore, IHubContext<TradingHub> hub)
 {
-    var validation = await ValidateMarketOrderAsync(request, db, riskSettingsStore);
+    var validation = await ValidateMarketOrderAsync(request, db, riskSettingsStore, dailyPerformanceStore);
     if (validation.Errors.Count > 0)
     {
         db.AuditLogs.Add(AuditLogRecord.BrokerAction(
@@ -609,7 +623,7 @@ static async Task<IResult> ProcessMarketOrderAsync(MarketOrderRequest request, T
         Position: result.Position));
 }
 
-static async Task<MarketOrderValidationResult> ValidateMarketOrderAsync(MarketOrderRequest request, TradingDbContext db, RiskSettingsStore riskSettingsStore)
+static async Task<MarketOrderValidationResult> ValidateMarketOrderAsync(MarketOrderRequest request, TradingDbContext db, RiskSettingsStore riskSettingsStore, DailyPerformanceStore dailyPerformanceStore)
 {
     var errors = new List<string>();
     var symbol = request.Symbol?.Trim().ToUpperInvariant();
@@ -681,6 +695,21 @@ static async Task<MarketOrderValidationResult> ValidateMarketOrderAsync(MarketOr
         if (estimatedLoss > settings.MaxLossPerTrade)
         {
             errors.Add($"Estimated loss {estimatedLoss:0.##} exceeds max loss per trade {settings.MaxLossPerTrade:0.##}");
+        }
+    }
+
+    if (settings.MaxDailyLoss > 0 && request.AttachProtection == true && request.ProtectionDistance is > 0 && contracts is > 0 && !string.IsNullOrWhiteSpace(symbol))
+    {
+        var projectedLoss = request.ProtectionDistance.Value * contracts.Value * GetPointValue(symbol);
+        var today = dailyPerformanceStore.GetToday();
+        var currentLoss = Math.Max(0m, -today.RealizedPnl);
+        if (currentLoss >= settings.MaxDailyLoss)
+        {
+            errors.Add($"Daily loss {currentLoss:0.##} reached max daily loss {settings.MaxDailyLoss:0.##}");
+        }
+        else if (currentLoss + projectedLoss > settings.MaxDailyLoss)
+        {
+            errors.Add($"Projected daily loss {(currentLoss + projectedLoss):0.##} exceeds max daily loss {settings.MaxDailyLoss:0.##}");
         }
     }
 

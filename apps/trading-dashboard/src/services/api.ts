@@ -1,4 +1,4 @@
-import type { AuditLogRecord, BrokerConnectionTestResult, BrokerMode, BrokerSettings, MarketOrderRequest, MarketOrderResponse, OrderRecord, PaperActionResult, PositionRecord, ProtectionUpdateRequest, ProtectionUpdateResponse, RiskSettings, TradingSignal, TradingSignalRequest } from './types'
+import type { AuditLogRecord, BrokerConnectionTestResult, BrokerMode, BrokerSettings, DailyPerformance, MarketOrderRequest, MarketOrderResponse, OrderRecord, PaperActionResult, PositionRecord, ProtectionUpdateRequest, ProtectionUpdateResponse, RiskSettings, TradingSignal, TradingSignalRequest } from './types'
 
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/+$/, '')
 
@@ -22,6 +22,10 @@ export async function getPositions() {
 
 export async function getAuditLogs() {
   return normalizeCollection<AuditLogRecord>(await request<AuditLogRecord[] | { value: AuditLogRecord[] }>('/api/audit-logs'))
+}
+
+export async function getDailyPerformance() {
+  return request<DailyPerformance>('/api/performance/daily')
 }
 
 export async function getBrokerMode() {

@@ -455,6 +455,37 @@ h3 {
   color: #b42318;
 }
 
+.daily-performance-strip {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  padding: 10px 16px;
+  border-bottom: 1px solid #edf0f2;
+  background: #ffffff;
+}
+
+.daily-performance-strip span {
+  display: block;
+  color: #667085;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.daily-performance-strip strong {
+  display: block;
+  margin-top: 3px;
+  color: #181a1b;
+  font-size: 15px;
+}
+
+.daily-performance-strip strong.positive {
+  color: #13795b;
+}
+
+.daily-performance-strip strong.negative {
+  color: #b42318;
+}
+
 .chart-trade-panel {
   display: grid;
   grid-template-columns: minmax(150px, 0.8fr) minmax(120px, 0.6fr) minmax(320px, 1.8fr);

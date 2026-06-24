@@ -4,7 +4,9 @@ using RoniAT.TradingEngine.Models;
 
 namespace RoniAT.TradingEngine.Services;
 
-public sealed class RiskValidator(RiskSettingsStore settingsStore)
+public sealed class RiskValidator(
+    RiskSettingsStore settingsStore,
+    DailyPerformanceStore dailyPerformanceStore)
 {
     public async Task<RiskValidationResult> ValidateEntrySignalAsync(TradingSignalRecord signal, TradingDbContext db)
     {
@@ -46,6 +48,11 @@ public sealed class RiskValidator(RiskSettingsStore settingsStore)
                 reasons.Add($"Estimated loss {estimatedLoss:0.##} exceeds max loss per trade {settings.MaxLossPerTrade:0.##}");
             }
         }
+
+        var projectedLoss = settings.TestMode
+            ? 100m * signal.Contracts * GetPointValue(signal.Symbol)
+            : Math.Abs(signal.EntryPrice - signal.StopLoss) * signal.Contracts * GetPointValue(signal.Symbol);
+        AddDailyLossReasons(settings, projectedLoss, reasons);
 
         var allowedSymbols = settings.AllowedSymbols
             .Where(symbol => !string.IsNullOrWhiteSpace(symbol))
@@ -110,6 +117,27 @@ public sealed class RiskValidator(RiskSettingsStore settingsStore)
             "ES" => 50m,
             _ => 1m
         };
+    }
+
+    private void AddDailyLossReasons(RiskSettings settings, decimal projectedLoss, List<string> reasons)
+    {
+        if (settings.MaxDailyLoss <= 0)
+        {
+            return;
+        }
+
+        var today = dailyPerformanceStore.GetToday();
+        var currentLoss = Math.Max(0m, -today.RealizedPnl);
+        if (currentLoss >= settings.MaxDailyLoss)
+        {
+            reasons.Add($"Daily loss {currentLoss:0.##} reached max daily loss {settings.MaxDailyLoss:0.##}");
+            return;
+        }
+
+        if (currentLoss + projectedLoss > settings.MaxDailyLoss)
+        {
+            reasons.Add($"Projected daily loss {(currentLoss + projectedLoss):0.##} exceeds max daily loss {settings.MaxDailyLoss:0.##}");
+        }
     }
 }
 
