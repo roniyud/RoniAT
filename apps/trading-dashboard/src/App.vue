@@ -515,9 +515,11 @@ async function handleSubmitChartTrade(direction: 'LONG' | 'SHORT') {
     contracts: Number(manualTrade.value.contracts),
     symbol: chartSymbol.value,
     reference_price: Number(entryPrice),
+    attach_protection: true,
+    protection_distance: 100,
   }
 
-  if (requireChartTradeConfirmation.value && !window.confirm(`Submit ${direction} market order for ${trade.contracts} ${trade.symbol} at reference price ${formatPrice(trade.reference_price)}?`)) {
+  if (requireChartTradeConfirmation.value && !window.confirm(`Submit ${direction} market order for ${trade.contracts} ${trade.symbol} at reference price ${formatPrice(trade.reference_price)} with 100 point TP/SL?`)) {
     return
   }
 

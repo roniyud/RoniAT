@@ -11,7 +11,7 @@ public interface IBrokerAdapter
 
     Task ApplyEntrySignalAsync(TradingSignalRecord signal, TradingDbContext db);
 
-    Task<MarketOrderResult> PlaceMarketOrderAsync(string symbol, string direction, int contracts, decimal? referencePrice, TradingDbContext db);
+    Task<MarketOrderResult> PlaceMarketOrderAsync(string symbol, string direction, int contracts, decimal? referencePrice, TradingDbContext db, bool attachProtection = false, decimal? protectionDistance = null);
 
     Task<BrokerActionResult> CancelWorkingOrdersAsync(string? symbol, TradingDbContext db);
 

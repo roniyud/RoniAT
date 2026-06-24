@@ -131,7 +131,7 @@ public sealed class IBKRBrokerAdapter(
         }
     }
 
-    public async Task<MarketOrderResult> PlaceMarketOrderAsync(string symbol, string direction, int contracts, decimal? referencePrice, TradingDbContext db)
+    public async Task<MarketOrderResult> PlaceMarketOrderAsync(string symbol, string direction, int contracts, decimal? referencePrice, TradingDbContext db, bool attachProtection = false, decimal? protectionDistance = null)
     {
         var brokerSettings = settingsStore.Get();
         var settings = settingsStore.GetActiveIBKRSettings();
@@ -187,6 +187,41 @@ public sealed class IBKRBrokerAdapter(
                 });
 
                 position = await UpsertMarketPositionAsync(normalizedSymbol, normalizedDirection, contracts, submittedOrder.AverageFillPrice, db, now);
+
+                if (attachProtection && position is not null)
+                {
+                    var distance = protectionDistance is > 0 ? protectionDistance.Value : 100m;
+                    var (stopLoss, takeProfit) = CalculateProtectionLevels(normalizedDirection, submittedOrder.AverageFillPrice, distance);
+                    var protectiveOrders = await connectionSession.PlaceProtectiveExitOrdersAsync(
+                        normalizedSymbol,
+                        normalizedDirection,
+                        contracts,
+                        stopLoss,
+                        takeProfit);
+
+                    position.StopLoss = stopLoss;
+                    position.TakeProfit1 = takeProfit;
+                    position.TakeProfit2 = null;
+                    position.UpdatedAt = now;
+
+                    foreach (var protectiveOrder in protectiveOrders)
+                    {
+                        var isStop = protectiveOrder.OrderId == protectiveOrders[0].OrderId;
+                        db.Orders.Add(new OrderRecord
+                        {
+                            BrokerOrderId = protectiveOrder.OrderId.ToString(),
+                            Symbol = normalizedSymbol,
+                            Direction = normalizedDirection == "LONG" ? "SHORT" : "LONG",
+                            OrderType = isStop ? "ibkr_stop_loss" : "ibkr_take_profit",
+                            Quantity = contracts,
+                            Price = isStop ? null : takeProfit,
+                            StopPrice = isStop ? stopLoss : null,
+                            Status = MapOrderStatus(protectiveOrder.Status),
+                            CreatedAt = now,
+                            UpdatedAt = now
+                        });
+                    }
+                }
             }
 
             db.AuditLogs.Add(AuditLogRecord.BrokerAction(
@@ -224,6 +259,13 @@ public sealed class IBKRBrokerAdapter(
         return new MarketOrderResult(false, "broker_blocked", reason, null, null);
     }
 
+    private static (decimal StopLoss, decimal TakeProfit) CalculateProtectionLevels(string direction, decimal averageFillPrice, decimal distance)
+    {
+        return direction == "LONG"
+            ? (averageFillPrice - distance, averageFillPrice + distance)
+            : (averageFillPrice + distance, averageFillPrice - distance);
+    }
+
     private static void BlockEntry(TradingSignalRecord signal, TradingDbContext db, string reason)
     {
         signal.Status = "broker_blocked";
@@ -236,17 +278,41 @@ public sealed class IBKRBrokerAdapter(
             $"IBKR blocked entry signal {signal.Id} {signal.Symbol} {signal.Direction} {signal.Contracts}: {reason}"));
     }
 
-    public Task<BrokerActionResult> CancelWorkingOrdersAsync(string? symbol, TradingDbContext db)
+    public async Task<BrokerActionResult> CancelWorkingOrdersAsync(string? symbol, TradingDbContext db)
     {
-        RecordBlockedAction(db, "ibkr.cancel_orders_blocked", $$"""
-        {"symbol":"{{symbol ?? ""}}","reason":"IBKR adapter skeleton does not cancel live orders"}
-        """);
+        var normalizedSymbol = string.IsNullOrWhiteSpace(symbol) ? null : symbol.Trim().ToUpperInvariant();
+        var query = db.Orders.Where(order => order.Status == "working");
+        if (normalizedSymbol is not null)
+        {
+            query = query.Where(order => order.Symbol == normalizedSymbol);
+        }
+
+        var orders = await query.ToListAsync();
+        var orderIds = orders
+            .Select(order => int.TryParse(order.BrokerOrderId, out var orderId) ? orderId : (int?)null)
+            .Where(orderId => orderId is not null)
+            .Select(orderId => orderId!.Value)
+            .ToArray();
+
+        if (orderIds.Length > 0)
+        {
+            await connectionSession.CancelOrdersAsync(orderIds);
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        foreach (var order in orders)
+        {
+            order.Status = "cancelled";
+            order.UpdatedAt = now;
+        }
 
         db.AuditLogs.Add(AuditLogRecord.BrokerAction(
-            "ibkr.cancel_orders_blocked",
-            "IBKR skeleton blocked cancel working orders"));
+            "ibkr.orders_cancelled",
+            normalizedSymbol is null
+                ? $"Cancelled {orders.Count} system-owned IBKR working orders"
+                : $"Cancelled {orders.Count} system-owned IBKR working orders for {normalizedSymbol}"));
 
-        return Task.FromResult(new BrokerActionResult(0, 0));
+        return new BrokerActionResult(orders.Count, 0);
     }
 
     public async Task<BrokerActionResult> ClosePositionAsync(string symbol, TradingDbContext db)
@@ -261,6 +327,8 @@ public sealed class IBKRBrokerAdapter(
 
             return new BrokerActionResult(0, 0);
         }
+
+        await CancelWorkingOrdersAsync(normalizedSymbol, db);
 
         var closeDirection = position.Direction == "LONG" ? "SHORT" : "LONG";
         var result = await PlaceMarketOrderAsync(

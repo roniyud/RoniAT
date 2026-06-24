@@ -106,7 +106,7 @@ public sealed class PaperBrokerAdapter : IBrokerAdapter
         db.AuditLogs.Add(AuditLogRecord.PaperPositionOpened(signal));
     }
 
-    public async Task<MarketOrderResult> PlaceMarketOrderAsync(string symbol, string direction, int contracts, decimal? referencePrice, TradingDbContext db)
+    public async Task<MarketOrderResult> PlaceMarketOrderAsync(string symbol, string direction, int contracts, decimal? referencePrice, TradingDbContext db, bool attachProtection = false, decimal? protectionDistance = null)
     {
         var normalizedSymbol = NormalizeSymbol(symbol);
         if (normalizedSymbol is null)
@@ -144,6 +144,45 @@ public sealed class PaperBrokerAdapter : IBrokerAdapter
         });
 
         var position = await UpsertMarketPositionAsync(normalizedSymbol, normalizedDirection, contracts, fillPrice, db, now);
+        if (attachProtection && position is not null)
+        {
+            var distance = protectionDistance is > 0 ? protectionDistance.Value : 100m;
+            var (stopLoss, takeProfit) = normalizedDirection == "LONG"
+                ? (fillPrice - distance, fillPrice + distance)
+                : (fillPrice + distance, fillPrice - distance);
+            var exitDirection = normalizedDirection == "LONG" ? "SHORT" : "LONG";
+
+            position.StopLoss = stopLoss;
+            position.TakeProfit1 = takeProfit;
+            position.TakeProfit2 = null;
+            position.UpdatedAt = now;
+
+            db.Orders.Add(new OrderRecord
+            {
+                BrokerOrderId = $"{brokerOrderId}-SL",
+                Symbol = normalizedSymbol,
+                Direction = exitDirection,
+                OrderType = "paper_stop_loss",
+                Quantity = contracts,
+                StopPrice = stopLoss,
+                Status = "working",
+                CreatedAt = now,
+                UpdatedAt = now
+            });
+
+            db.Orders.Add(new OrderRecord
+            {
+                BrokerOrderId = $"{brokerOrderId}-TP",
+                Symbol = normalizedSymbol,
+                Direction = exitDirection,
+                OrderType = "paper_take_profit",
+                Quantity = contracts,
+                Price = takeProfit,
+                Status = "working",
+                CreatedAt = now,
+                UpdatedAt = now
+            });
+        }
 
         db.AuditLogs.Add(AuditLogRecord.PaperAction(
             "paper.market_order_filled",

@@ -360,6 +360,129 @@ public sealed class IBKRConnectionSession(
         }
     }
 
+    public async Task<IReadOnlyList<IBKRSubmittedOrder>> PlaceProtectiveExitOrdersAsync(
+        string symbol,
+        string entryDirection,
+        int quantity,
+        decimal stopLoss,
+        decimal takeProfit,
+        CancellationToken cancellationToken = default)
+    {
+        await connectionLock.WaitAsync(cancellationToken);
+
+        try
+        {
+            var brokerSettings = settingsStore.Get();
+            var settings = settingsStore.GetActiveIBKRSettings();
+
+            if (!brokerSettings.Mode.Equals("IBKR", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException("Broker mode is not IBKR");
+            }
+
+            if (!brokerSettings.IbkrEnvironment.Equals("Paper", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException("Live IBKR order placement is not enabled. Switch to Paper.");
+            }
+
+            if (settings.ReadOnly)
+            {
+                throw new InvalidOperationException("IBKR is configured as read-only. Disable read-only before placing Paper orders.");
+            }
+
+            if (quantity <= 0)
+            {
+                throw new ArgumentException("quantity must be greater than zero", nameof(quantity));
+            }
+
+            var result = await EnsureConnectedLockedAsync(cancellationToken);
+            if (!result.HandshakeOk || client?.IsConnected() != true || wrapper is null)
+            {
+                throw new InvalidOperationException(result.Message);
+            }
+
+            var normalizedDirection = entryDirection.Trim().ToUpperInvariant();
+            var exitAction = normalizedDirection switch
+            {
+                "LONG" => "SELL",
+                "SHORT" => "BUY",
+                _ => throw new ArgumentException("entryDirection must be LONG or SHORT", nameof(entryDirection))
+            };
+
+            var normalizedSymbol = NormalizeDisplaySymbol(symbol);
+            var contract = BuildTradableContract(normalizedSymbol);
+            var ocaGroup = $"RONIAT-{normalizedSymbol}-{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}";
+            var stopOrderId = wrapper.TakeNextOrderId();
+            var takeProfitOrderId = wrapper.TakeNextOrderId();
+
+            var stopOrder = new Order
+            {
+                OrderId = stopOrderId,
+                Action = exitAction,
+                TotalQuantity = quantity,
+                OrderType = "STP",
+                AuxPrice = decimal.ToDouble(stopLoss),
+                Tif = "GTC",
+                Account = settings.Account,
+                OcaGroup = ocaGroup,
+                OcaType = 1,
+                Transmit = true
+            };
+
+            var takeProfitOrder = new Order
+            {
+                OrderId = takeProfitOrderId,
+                Action = exitAction,
+                TotalQuantity = quantity,
+                OrderType = "LMT",
+                LmtPrice = decimal.ToDouble(takeProfit),
+                Tif = "GTC",
+                Account = settings.Account,
+                OcaGroup = ocaGroup,
+                OcaType = 1,
+                Transmit = true
+            };
+
+            wrapper.TrackSubmittedOrder(stopOrderId);
+            wrapper.TrackSubmittedOrder(takeProfitOrderId);
+            client.placeOrder(stopOrderId, contract, stopOrder);
+            client.placeOrder(takeProfitOrderId, contract, takeProfitOrder);
+
+            return
+            [
+                new IBKRSubmittedOrder(stopOrderId, normalizedSymbol, normalizedDirection, quantity, "Submitted", 0, quantity, 0, 0, "Protective stop submitted"),
+                new IBKRSubmittedOrder(takeProfitOrderId, normalizedSymbol, normalizedDirection, quantity, "Submitted", 0, quantity, 0, 0, "Protective take profit submitted")
+            ];
+        }
+        finally
+        {
+            connectionLock.Release();
+        }
+    }
+
+    public async Task CancelOrdersAsync(IEnumerable<int> orderIds, CancellationToken cancellationToken = default)
+    {
+        await connectionLock.WaitAsync(cancellationToken);
+
+        try
+        {
+            var result = await EnsureConnectedLockedAsync(cancellationToken);
+            if (!result.HandshakeOk || client?.IsConnected() != true)
+            {
+                throw new InvalidOperationException(result.Message);
+            }
+
+            foreach (var orderId in orderIds.Distinct())
+            {
+                client.cancelOrder(orderId, "");
+            }
+        }
+        finally
+        {
+            connectionLock.Release();
+        }
+    }
+
     private void EnsureMarketDataSubscriptionLocked(string symbol, Contract contract)
     {
         if (client?.IsConnected() != true || wrapper is null || marketDataSubscriptions.ContainsKey(symbol))
@@ -603,6 +726,9 @@ public sealed class IBKRConnectionSession(
         using var scope = scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<TradingDbContext>();
         var existing = await db.Positions.ToListAsync(cancellationToken);
+        var workingOrders = await db.Orders
+            .Where(order => order.Status == "working")
+            .ToListAsync(cancellationToken);
         var systemOwnedSymbols = await db.Orders
             .Select(order => order.Symbol)
             .Distinct()
@@ -639,6 +765,7 @@ public sealed class IBKRConnectionSession(
             }
 
             var direction = ibkrPosition.Quantity > 0 ? "LONG" : "SHORT";
+            var protection = GetProtectionLevels(workingOrders, ibkrPosition.Symbol);
             var existingPosition = existing.SingleOrDefault(position =>
                 position.Symbol.Equals(ibkrPosition.Symbol, StringComparison.OrdinalIgnoreCase));
 
@@ -650,8 +777,8 @@ public sealed class IBKRConnectionSession(
                     Direction = direction,
                     Quantity = quantity,
                     AveragePrice = ibkrPosition.AveragePrice,
-                    StopLoss = null,
-                    TakeProfit1 = null,
+                    StopLoss = protection.StopLoss,
+                    TakeProfit1 = protection.TakeProfit,
                     TakeProfit2 = null,
                     OpenedAt = now,
                     UpdatedAt = now
@@ -662,13 +789,16 @@ public sealed class IBKRConnectionSession(
 
             if (existingPosition.Direction != direction
                 || existingPosition.Quantity != quantity
-                || existingPosition.AveragePrice != ibkrPosition.AveragePrice)
+                || existingPosition.AveragePrice != ibkrPosition.AveragePrice
+                || existingPosition.StopLoss != protection.StopLoss
+                || existingPosition.TakeProfit1 != protection.TakeProfit
+                || existingPosition.TakeProfit2 is not null)
             {
                 existingPosition.Direction = direction;
                 existingPosition.Quantity = quantity;
                 existingPosition.AveragePrice = ibkrPosition.AveragePrice;
-                existingPosition.StopLoss = null;
-                existingPosition.TakeProfit1 = null;
+                existingPosition.StopLoss = protection.StopLoss;
+                existingPosition.TakeProfit1 = protection.TakeProfit;
                 existingPosition.TakeProfit2 = null;
                 existingPosition.UpdatedAt = now;
                 changed = true;
@@ -690,6 +820,17 @@ public sealed class IBKRConnectionSession(
             symbol = (string?)null,
             occurred_at = DateTimeOffset.UtcNow
         }, cancellationToken);
+    }
+
+    private static (decimal? StopLoss, decimal? TakeProfit) GetProtectionLevels(IReadOnlyList<OrderRecord> workingOrders, string symbol)
+    {
+        var symbolOrders = workingOrders
+            .Where(order => order.Symbol.Equals(symbol, StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+
+        return (
+            symbolOrders.FirstOrDefault(order => order.OrderType.Contains("stop_loss", StringComparison.OrdinalIgnoreCase))?.StopPrice,
+            symbolOrders.FirstOrDefault(order => order.OrderType.Contains("take_profit", StringComparison.OrdinalIgnoreCase))?.Price);
     }
 
     private sealed class SessionWrapper(Action<IBKRMarketTick> onMarketTick) : DefaultEWrapper

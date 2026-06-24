@@ -30,6 +30,8 @@ export type MarketOrderRequest = {
   direction: 'LONG' | 'SHORT'
   contracts: number
   reference_price?: number | null
+  attach_protection?: boolean
+  protection_distance?: number | null
 }
 
 export type MarketOrderResponse = {

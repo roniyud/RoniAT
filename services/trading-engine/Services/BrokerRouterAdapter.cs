@@ -20,9 +20,9 @@ public sealed class BrokerRouterAdapter(
         return ActiveAdapter.ApplyEntrySignalAsync(signal, db);
     }
 
-    public Task<MarketOrderResult> PlaceMarketOrderAsync(string symbol, string direction, int contracts, decimal? referencePrice, TradingDbContext db)
+    public Task<MarketOrderResult> PlaceMarketOrderAsync(string symbol, string direction, int contracts, decimal? referencePrice, TradingDbContext db, bool attachProtection = false, decimal? protectionDistance = null)
     {
-        return ActiveAdapter.PlaceMarketOrderAsync(symbol, direction, contracts, referencePrice, db);
+        return ActiveAdapter.PlaceMarketOrderAsync(symbol, direction, contracts, referencePrice, db, attachProtection, protectionDistance);
     }
 
     public Task<BrokerActionResult> CancelWorkingOrdersAsync(string? symbol, TradingDbContext db)

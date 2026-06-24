@@ -543,7 +543,9 @@ static async Task<IResult> ProcessMarketOrderAsync(MarketOrderRequest request, T
         validation.Direction!,
         validation.Contracts!.Value,
         request.ReferencePrice,
-        db);
+        db,
+        request.AttachProtection == true,
+        request.ProtectionDistance);
 
     await db.SaveChangesAsync();
     await BroadcastTradingUpdateAsync(hub, result.Ok ? "market_order.created" : "market_order.rejected", validation.Symbol);
