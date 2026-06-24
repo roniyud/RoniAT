@@ -115,13 +115,13 @@ app.MapGet("/health", () => Results.Ok(new { status = "ok", service = "trading-e
 
 app.MapHub<TradingHub>("/hubs/trading");
 
-app.MapPost("/api/signals", async (TradingSignalRequest request, TradingDbContext db, IBrokerAdapter brokerAdapter, RiskValidator riskValidator, IHubContext<TradingHub> hub) =>
-    await ProcessSignalAsync(request, isManualTrade: false, db, brokerAdapter, riskValidator, hub))
+app.MapPost("/api/signals", async (TradingSignalRequest request, TradingDbContext db, IBrokerAdapter brokerAdapter, RiskValidator riskValidator, RiskSettingsStore riskSettingsStore, IHubContext<TradingHub> hub) =>
+    await ProcessSignalAsync(request, isManualTrade: false, db, brokerAdapter, riskValidator, riskSettingsStore, hub))
 .WithName("CreateSignal")
 .WithOpenApi();
 
-app.MapPost("/api/manual-trades", async (TradingSignalRequest request, TradingDbContext db, IBrokerAdapter brokerAdapter, RiskValidator riskValidator, IHubContext<TradingHub> hub) =>
-    await ProcessSignalAsync(request, isManualTrade: true, db, brokerAdapter, riskValidator, hub))
+app.MapPost("/api/manual-trades", async (TradingSignalRequest request, TradingDbContext db, IBrokerAdapter brokerAdapter, RiskValidator riskValidator, RiskSettingsStore riskSettingsStore, IHubContext<TradingHub> hub) =>
+    await ProcessSignalAsync(request, isManualTrade: true, db, brokerAdapter, riskValidator, riskSettingsStore, hub))
 .WithName("CreateManualTrade")
 .WithOpenApi();
 
@@ -699,7 +699,7 @@ static decimal GetPointValue(string symbol)
     };
 }
 
-static async Task<IResult> ProcessSignalAsync(TradingSignalRequest request, bool isManualTrade, TradingDbContext db, IBrokerAdapter brokerAdapter, RiskValidator riskValidator, IHubContext<TradingHub> hub)
+static async Task<IResult> ProcessSignalAsync(TradingSignalRequest request, bool isManualTrade, TradingDbContext db, IBrokerAdapter brokerAdapter, RiskValidator riskValidator, RiskSettingsStore riskSettingsStore, IHubContext<TradingHub> hub)
 {
     var validation = TradingSignalValidator.Validate(request);
     if (!validation.Ok)
@@ -732,7 +732,30 @@ static async Task<IResult> ProcessSignalAsync(TradingSignalRequest request, bool
     }
 
     db.AuditLogs.Add(AuditLogRecord.RiskApproved(signal));
-    await brokerAdapter.ApplyEntrySignalAsync(signal, db);
+    var riskSettings = riskSettingsStore.Get();
+    if (riskSettings.TestMode)
+    {
+        const decimal testProtectionDistance = 100m;
+        var result = await brokerAdapter.PlaceMarketOrderAsync(
+            signal.Symbol,
+            signal.Direction,
+            signal.Contracts,
+            signal.EntryPrice,
+            db,
+            attachProtection: true,
+            protectionDistance: testProtectionDistance);
+
+        signal.Status = result.Ok
+            ? "test_market_order_sent"
+            : result.Status == "blocked" ? "broker_blocked" : "test_market_order_failed";
+        db.AuditLogs.Add(AuditLogRecord.BrokerAction(
+            result.Ok ? "test_mode.market_order_sent" : "test_mode.market_order_failed",
+            $"Test mode converted signal {signal.Id} {signal.Symbol} {signal.Direction} {signal.Contracts} to market order with {testProtectionDistance:0.##} point SL/TP: {result.Message}"));
+    }
+    else
+    {
+        await brokerAdapter.ApplyEntrySignalAsync(signal, db);
+    }
     await db.SaveChangesAsync();
 
     var eventType = signal.Status == "broker_blocked"

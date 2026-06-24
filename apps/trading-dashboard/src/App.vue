@@ -1435,7 +1435,7 @@ watch(activeTab, (tab) => {
           <label class="toggle-row">
             <span>
               <strong>Test Mode</strong>
-              <small>{{ riskForm.test_mode ? 'Enabled' : 'Disabled' }}</small>
+              <small>{{ riskForm.test_mode ? 'Signals become market orders with 100 point SL/TP' : 'Disabled' }}</small>
             </span>
             <input v-model="riskForm.test_mode" type="checkbox" />
           </label>

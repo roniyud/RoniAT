@@ -37,7 +37,10 @@ public sealed class RiskValidator(RiskSettingsStore settingsStore)
 
         if (settings.MaxLossPerTrade > 0)
         {
-            var estimatedLoss = Math.Abs(signal.EntryPrice - signal.StopLoss) * signal.Contracts * GetPointValue(signal.Symbol);
+            var stopDistance = settings.TestMode
+                ? 100m
+                : Math.Abs(signal.EntryPrice - signal.StopLoss);
+            var estimatedLoss = stopDistance * signal.Contracts * GetPointValue(signal.Symbol);
             if (estimatedLoss > settings.MaxLossPerTrade)
             {
                 reasons.Add($"Estimated loss {estimatedLoss:0.##} exceeds max loss per trade {settings.MaxLossPerTrade:0.##}");
