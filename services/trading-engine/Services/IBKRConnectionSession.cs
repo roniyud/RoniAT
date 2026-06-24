@@ -741,6 +741,10 @@ public sealed class IBKRConnectionSession(
             .Where(position => systemOwnedSymbolSet.Contains(position.Symbol))
             .Select(position => position.Symbol)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var orphanWorkingOrders = workingOrders
+            .Where(order => systemOwnedSymbolSet.Contains(order.Symbol))
+            .Where(order => !activeSymbols.Contains(order.Symbol))
+            .ToList();
 
         foreach (var stale in existing
             .Where(position => systemOwnedSymbolSet.Contains(position.Symbol))
@@ -748,6 +752,25 @@ public sealed class IBKRConnectionSession(
             .ToList())
         {
             db.Positions.Remove(stale);
+            changed = true;
+        }
+
+        if (orphanWorkingOrders.Count > 0)
+        {
+            CancelTrackedWorkingOrders(orphanWorkingOrders);
+            foreach (var order in orphanWorkingOrders)
+            {
+                order.Status = "cancelled";
+                order.UpdatedAt = now;
+            }
+
+            var orphanSymbols = string.Join(",", orphanWorkingOrders
+                .Select(order => order.Symbol)
+                .Distinct(StringComparer.OrdinalIgnoreCase));
+
+            db.AuditLogs.Add(AuditLogRecord.BrokerAction(
+                "ibkr.orphan_orders_cancelled",
+                $"Cancelled {orphanWorkingOrders.Count} system-owned working orders with no open IBKR position: {orphanSymbols}"));
             changed = true;
         }
 
@@ -820,6 +843,23 @@ public sealed class IBKRConnectionSession(
             symbol = (string?)null,
             occurred_at = DateTimeOffset.UtcNow
         }, cancellationToken);
+    }
+
+    private void CancelTrackedWorkingOrders(IReadOnlyList<OrderRecord> orders)
+    {
+        if (client?.IsConnected() != true)
+        {
+            return;
+        }
+
+        foreach (var orderId in orders
+            .Select(order => int.TryParse(order.BrokerOrderId, out var parsed) ? parsed : (int?)null)
+            .Where(orderId => orderId is not null)
+            .Select(orderId => orderId!.Value)
+            .Distinct())
+        {
+            client.cancelOrder(orderId, "");
+        }
     }
 
     private static (decimal? StopLoss, decimal? TakeProfit) GetProtectionLevels(IReadOnlyList<OrderRecord> workingOrders, string symbol)

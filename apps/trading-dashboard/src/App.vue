@@ -136,6 +136,9 @@ const chartLevels = computed(() => {
   const levels: { id: string; label: string; price: number; color: string; style?: 'solid' | 'dashed' | 'dotted' }[] = []
   const symbolPosition = positions.value.find((position) => normalizeSymbol(position.symbol) === symbol)
   const symbolOrders = orders.value.filter((order) => normalizeSymbol(order.symbol) === symbol && order.status === 'working')
+  const hasPositionProtection = symbolPosition?.stopLoss != null
+    || symbolPosition?.takeProfit1 != null
+    || symbolPosition?.takeProfit2 != null
 
   if (symbolPosition) {
     levels.push({
@@ -158,6 +161,7 @@ const chartLevels = computed(() => {
   }
 
   for (const order of symbolOrders) {
+    if (hasPositionProtection && isProtectionOrder(order.orderType)) continue
     const price = order.price ?? order.stopPrice
     if (price == null) continue
     levels.push({
@@ -222,6 +226,11 @@ const canSubmitChartTrade = computed(() => !chartTradeBlockedReason.value && !is
 
 function normalizeSymbol(symbol?: string | null) {
   return symbol?.trim().toUpperCase() ?? ''
+}
+
+function isProtectionOrder(orderType: string) {
+  const normalized = orderType.toLowerCase()
+  return normalized.includes('stop_loss') || normalized.includes('take_profit')
 }
 
 function getPointValue(symbol: string) {
