@@ -1,4 +1,5 @@
 import { HubConnectionBuilder, HubConnectionState, LogLevel } from '@microsoft/signalr'
+import { getAuthToken } from './api'
 
 export type TradingUpdate = {
   event_type: string
@@ -23,7 +24,9 @@ export function createTradingRealtimeClient(
   onMarketTick?: (tick: MarketTick) => void,
 ) {
   const connection = new HubConnectionBuilder()
-    .withUrl(`${API_BASE_URL}/hubs/trading`)
+    .withUrl(`${API_BASE_URL}/hubs/trading`, {
+      accessTokenFactory: () => getAuthToken() ?? '',
+    })
     .withAutomaticReconnect()
     .configureLogging(LogLevel.Warning)
     .build()

@@ -23,6 +23,8 @@ import {
   emergencyStop,
   flattenPaperAccount,
   getAuditLogs,
+  getAuthToken,
+  getClosedPositions,
   getDailyPerformance,
   getBrokerSettings,
   getBrokerMode,
@@ -31,7 +33,9 @@ import {
   getPositions,
   getRiskSettings,
   getSignals,
+  login,
   lockTrading,
+  logout,
   resumeTrading,
   submitMarketOrder,
   submitManualTrade,
@@ -40,16 +44,23 @@ import {
   updateBrokerSettings,
   updateRiskSettings,
 } from './services/api'
-import { getCandles, type Timeframe } from './services/market-data'
+import { getCandles, startMarketDataStream, type Timeframe } from './services/market-data'
 import type { CandlestickData, UTCTimestamp } from 'lightweight-charts'
 import { createTradingRealtimeClient, type MarketTick, type RealtimeStatus, type TradingUpdate } from './services/realtime'
-import type { ApiState, AuditLogRecord, BrokerConnectionTestResult, BrokerMode, BrokerSettings, DailyPerformance, IBKRSettings, MarketOrderResponse, OrderRecord, PositionRecord, RiskSettings, TradingSignal, TradingSignalRequest } from './services/types'
+import type { ApiState, AuditLogRecord, BrokerConnectionTestResult, BrokerMode, BrokerSettings, ClosedPositionRecord, DailyPerformance, IBKRSettings, MarketOrderResponse, OrderRecord, PositionRecord, RiskSettings, TradingSignal, TradingSignalRequest } from './services/types'
 
 const apiState = ref<ApiState>('loading')
+const isAuthenticated = ref(Boolean(getAuthToken()))
+const loginForm = ref({ username: 'admin', password: '' })
+const isLoggingIn = ref(false)
+const loginMessage = ref('')
 const activeTab = ref<'chart' | 'trade' | 'signals' | 'orders' | 'positions' | 'audit' | 'settings'>('chart')
+const positionsView = ref<'open' | 'closed'>('open')
 const signals = ref<TradingSignal[]>([])
 const orders = ref<OrderRecord[]>([])
 const positions = ref<PositionRecord[]>([])
+const closedPositions = ref<ClosedPositionRecord[]>([])
+const closedPositionsDate = ref(getTodayDateInput())
 const auditLogs = ref<AuditLogRecord[]>([])
 const dailyPerformance = ref<DailyPerformance | null>(null)
 const riskSettings = ref<RiskSettings | null>(null)
@@ -89,6 +100,8 @@ const workingOrders = computed(() => orders.value.filter((order) => order.status
 const workingOrderCount = computed(() => workingOrders.value.length)
 const filledOrderCount = computed(() => orders.value.filter((order) => order.status === 'filled').length)
 const cancelledOrderCount = computed(() => orders.value.filter((order) => order.status === 'cancelled').length)
+const closedPositionsTotalQuantity = computed(() => closedPositions.value.reduce((total, position) => total + Math.abs(position.quantity), 0))
+const closedPositionsTotalPnl = computed(() => closedPositions.value.reduce((total, position) => total + (position.realizedPnl ?? 0), 0))
 const rejectedSignalCount = computed(() => signals.value.filter((signal) => signal.status === 'rejected_by_risk').length)
 const approvedSignalCount = computed(() => signals.value.length - rejectedSignalCount.value)
 const safetyStatus = computed(() => {
@@ -199,6 +212,8 @@ const activeChartTrade = computed(() => {
     averagePrice: position.averagePrice,
     currentPrice,
     estimatedPnl,
+    maxProfit: calculatePositionMaxProfit(position),
+    maxLoss: calculatePositionMaxLoss(position),
     stopLoss: position.stopLoss,
     takeProfit1: position.takeProfit1,
     takeProfit2: position.takeProfit2,
@@ -247,16 +262,43 @@ function getPointValue(symbol: string) {
   return 1
 }
 
+function getTodayDateInput() {
+  const now = new Date()
+  const year = now.getFullYear()
+  const month = String(now.getMonth() + 1).padStart(2, '0')
+  const day = String(now.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+function calculatePositionMaxLoss(position: PositionRecord) {
+  if (position.stopLoss == null || position.quantity <= 0) return null
+
+  const stopDistance = Math.abs(position.averagePrice - position.stopLoss)
+  if (!Number.isFinite(stopDistance) || stopDistance <= 0) return null
+
+  return stopDistance * Math.abs(position.quantity) * getPointValue(position.symbol)
+}
+
+function calculatePositionMaxProfit(position: PositionRecord) {
+  if (position.takeProfit1 == null || position.quantity <= 0) return null
+
+  const profitDistance = Math.abs(position.takeProfit1 - position.averagePrice)
+  if (!Number.isFinite(profitDistance) || profitDistance <= 0) return null
+
+  return profitDistance * Math.abs(position.quantity) * getPointValue(position.symbol)
+}
+
 async function refreshData() {
   isRefreshing.value = true
   errorMessage.value = ''
 
   try {
     await getHealth()
-    const [nextSignals, nextOrders, nextPositions, nextAuditLogs, nextDailyPerformance, nextRiskSettings, nextBrokerMode, nextBrokerSettings] = await Promise.all([
+    const [nextSignals, nextOrders, nextPositions, nextClosedPositions, nextAuditLogs, nextDailyPerformance, nextRiskSettings, nextBrokerMode, nextBrokerSettings] = await Promise.all([
       getSignals(),
       getOrders(),
       getPositions(),
+      getClosedPositions(closedPositionsDate.value),
       getAuditLogs(),
       getDailyPerformance(),
       getRiskSettings(),
@@ -267,6 +309,7 @@ async function refreshData() {
     signals.value = nextSignals
     orders.value = nextOrders
     positions.value = nextPositions
+    closedPositions.value = nextClosedPositions
     auditLogs.value = nextAuditLogs
     dailyPerformance.value = nextDailyPerformance
     riskSettings.value = nextRiskSettings
@@ -313,6 +356,14 @@ async function refreshCandles(showLoading = true) {
     if (showLoading) {
       isChartLoading.value = false
     }
+  }
+}
+
+async function ensureChartTickStream() {
+  try {
+    await startMarketDataStream(chartSymbol.value)
+  } catch (error) {
+    console.warn('Market data stream failed', error)
   }
 }
 
@@ -475,6 +526,7 @@ async function handleSaveRiskSettings() {
       max_loss_per_trade: Number(riskForm.value.max_loss_per_trade),
       max_daily_loss: Number(riskForm.value.max_daily_loss),
       max_entry_price_deviation_points: Number(riskForm.value.max_entry_price_deviation_points),
+      chart_market_protection_distance_points: Number(riskForm.value.chart_market_protection_distance_points),
       duplicate_window_seconds: Number(riskForm.value.duplicate_window_seconds),
     })
 
@@ -569,6 +621,7 @@ async function handleSubmitChartTrade(direction: 'LONG' | 'SHORT') {
     return
   }
 
+  const protectionDistance = getChartMarketProtectionDistance()
   const trade = {
     type: 'entry' as const,
     direction,
@@ -576,10 +629,10 @@ async function handleSubmitChartTrade(direction: 'LONG' | 'SHORT') {
     symbol: chartSymbol.value,
     reference_price: Number(entryPrice),
     attach_protection: true,
-    protection_distance: 100,
+    protection_distance: protectionDistance,
   }
 
-  if (requireChartTradeConfirmation.value && !window.confirm(`Submit ${direction} market order for ${trade.contracts} ${trade.symbol} at reference price ${formatPrice(trade.reference_price)} with 100 point TP/SL?`)) {
+  if (requireChartTradeConfirmation.value && !window.confirm(`Submit ${direction} market order for ${trade.contracts} ${trade.symbol} at reference price ${formatPrice(trade.reference_price)} with ${formatPrice(protectionDistance)} point TP/SL?`)) {
     return
   }
 
@@ -603,6 +656,11 @@ async function handleSubmitChartTrade(direction: 'LONG' | 'SHORT') {
   } finally {
     isSubmittingTrade.value = false
   }
+}
+
+function getChartMarketProtectionDistance() {
+  const distance = Number(riskSettings.value?.chart_market_protection_distance_points ?? riskForm.value?.chart_market_protection_distance_points ?? 100)
+  return Number.isFinite(distance) && distance > 0 ? distance : 100
 }
 
 function formatTradeSubmissionMessage(result: TradingSignal, source: string) {
@@ -681,6 +739,15 @@ function formatPrice(value: number | null | undefined) {
   return new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 }).format(value)
 }
 
+function formatCurrency(value: number | null | undefined) {
+  if (value === null || value === undefined) return '-'
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    maximumFractionDigits: 2,
+  }).format(value)
+}
+
 function formatTime(value: string | null | undefined) {
   if (!value) return '-'
   return new Intl.DateTimeFormat('en-US', {
@@ -698,6 +765,14 @@ function formatDateTime(value: string | null | undefined) {
     hour: '2-digit',
     minute: '2-digit',
   }).format(new Date(value))
+}
+
+function formatCloseReason(value: string) {
+  return value
+    .split('_')
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ')
 }
 
 function getWorkingOrdersForSymbol(symbol: string) {
@@ -758,9 +833,36 @@ function normalizeIBKRSettings(settings: IBKRSettings): IBKRSettings {
   }
 }
 
-onMounted(() => {
+async function handleLogin() {
+  isLoggingIn.value = true
+  loginMessage.value = ''
+  errorMessage.value = ''
+
+  try {
+    await login(loginForm.value.username.trim(), loginForm.value.password)
+    isAuthenticated.value = true
+    loginForm.value.password = ''
+    startDashboard()
+  } catch (error) {
+    loginMessage.value = error instanceof Error ? error.message : 'Login failed'
+  } finally {
+    isLoggingIn.value = false
+  }
+}
+
+async function handleLogout() {
+  await logout()
+  stopDashboard()
+  isAuthenticated.value = false
+  apiState.value = 'offline'
+  realtimeStatus.value = 'disconnected'
+}
+
+function startDashboard() {
+  stopDashboard()
   refreshData()
   refreshCandles()
+  ensureChartTickStream()
   refreshTimer = window.setInterval(refreshData, 5000)
   restartChartRefreshTimer()
   realtimeClient = createTradingRealtimeClient(
@@ -780,22 +882,50 @@ onMounted(() => {
     realtimeStatus.value = 'disconnected'
     console.warn('SignalR connection failed', error)
   })
+}
+
+function stopDashboard() {
+  if (refreshTimer) {
+    window.clearInterval(refreshTimer)
+    refreshTimer = undefined
+  }
+  if (chartRefreshTimer) {
+    window.clearInterval(chartRefreshTimer)
+    chartRefreshTimer = undefined
+  }
+  realtimeClient?.stop()
+  realtimeClient = undefined
+}
+
+onMounted(() => {
+  if (isAuthenticated.value) {
+    startDashboard()
+  } else {
+    apiState.value = 'offline'
+  }
 })
 
 onUnmounted(() => {
-  if (refreshTimer) window.clearInterval(refreshTimer)
-  if (chartRefreshTimer) window.clearInterval(chartRefreshTimer)
-  realtimeClient?.stop()
+  stopDashboard()
 })
 
 watch([chartSymbol, selectedTimeframe], () => {
+  if (!isAuthenticated.value) return
+  ensureChartTickStream()
   refreshCandles()
   restartChartRefreshTimer()
 })
 
 watch(activeTab, (tab) => {
-  if (tab === 'chart') {
+  if (isAuthenticated.value && tab === 'chart') {
+    ensureChartTickStream()
     refreshCandles(false)
+  }
+})
+
+watch(closedPositionsDate, () => {
+  if (isAuthenticated.value) {
+    refreshData()
   }
 })
 </script>
@@ -824,11 +954,40 @@ watch(activeTab, (tab) => {
         </div>
       </div>
 
-      <button class="icon-button" type="button" title="Refresh" :disabled="isRefreshing" @click="refreshData">
-        <RefreshCw :size="20" :class="{ spinning: isRefreshing }" />
-      </button>
+      <div class="topbar-actions">
+        <button v-if="isAuthenticated" class="action-button secondary" type="button" @click="handleLogout">
+          <ShieldCheck :size="16" />
+          <span>Logout</span>
+        </button>
+        <button v-if="isAuthenticated" class="icon-button" type="button" title="Refresh" :disabled="isRefreshing" @click="refreshData">
+          <RefreshCw :size="20" :class="{ spinning: isRefreshing }" />
+        </button>
+      </div>
     </header>
 
+    <section v-if="!isAuthenticated" class="login-panel">
+      <form class="login-form" @submit.prevent="handleLogin">
+        <div>
+          <h2>Dashboard Login</h2>
+          <p>Sign in before opening trading controls.</p>
+        </div>
+        <label>
+          <span>Username</span>
+          <input v-model="loginForm.username" type="text" autocomplete="username" />
+        </label>
+        <label>
+          <span>Password</span>
+          <input v-model="loginForm.password" type="password" autocomplete="current-password" />
+        </label>
+        <button class="action-button secondary" type="submit" :disabled="isLoggingIn">
+          <ShieldCheck :size="16" />
+          <span>{{ isLoggingIn ? 'Signing in' : 'Sign In' }}</span>
+        </button>
+        <span v-if="loginMessage" class="login-message">{{ loginMessage }}</span>
+      </form>
+    </section>
+
+    <template v-else>
     <section v-if="errorMessage" class="alert-strip">
       <AlertTriangle :size="18" />
       <span>{{ errorMessage }}</span>
@@ -1149,9 +1308,13 @@ watch(activeTab, (tab) => {
 
       <div v-if="activeTab === 'positions'" class="data-panel">
         <div class="panel-header">
-          <h2>Open Positions</h2>
+          <div>
+            <h2>Positions</h2>
+            <p class="panel-subtitle">{{ positions.length }} open / {{ closedPositions.length }} closed for selected day</p>
+          </div>
           <div class="panel-actions">
             <button
+              v-if="positionsView === 'open'"
               class="action-button danger"
               type="button"
               :disabled="Boolean(activeAction) || positions.length === 0"
@@ -1160,12 +1323,35 @@ watch(activeTab, (tab) => {
               <AlertTriangle :size="16" />
               <span>{{ activeAction === 'flatten' ? 'Flattening' : 'Flatten' }}</span>
             </button>
-            <span class="count-pill">{{ positions.length }}</span>
+            <span class="count-pill">{{ positionsView === 'open' ? positions.length : closedPositions.length }}</span>
           </div>
         </div>
 
-        <div v-if="positions.length === 0" class="empty-state">No positions</div>
-        <div v-else class="position-list">
+        <div class="position-view-tabs" role="tablist" aria-label="Position views">
+          <button
+            type="button"
+            role="tab"
+            :aria-selected="positionsView === 'open'"
+            :class="{ active: positionsView === 'open' }"
+            @click="positionsView = 'open'"
+          >
+            Open Positions
+            <span>{{ positions.length }}</span>
+          </button>
+          <button
+            type="button"
+            role="tab"
+            :aria-selected="positionsView === 'closed'"
+            :class="{ active: positionsView === 'closed' }"
+            @click="positionsView = 'closed'"
+          >
+            Closed Positions
+            <span>{{ closedPositions.length }}</span>
+          </button>
+        </div>
+
+        <div v-if="positionsView === 'open' && positions.length === 0" class="empty-state">No positions</div>
+        <div v-if="positionsView === 'open' && positions.length !== 0" class="position-list">
           <article v-for="position in positions" :key="position.id" class="position-row">
             <div>
               <strong>{{ position.symbol }}</strong>
@@ -1179,6 +1365,10 @@ watch(activeTab, (tab) => {
             <div>
               <span>Stop Loss</span>
               <strong>{{ formatPrice(position.stopLoss) }}</strong>
+            </div>
+            <div>
+              <span>Max Loss</span>
+              <strong class="negative">{{ formatCurrency(calculatePositionMaxLoss(position)) }}</strong>
             </div>
             <div>
               <span>Take Profits</span>
@@ -1209,6 +1399,78 @@ watch(activeTab, (tab) => {
               </button>
             </div>
           </article>
+        </div>
+
+        <div v-if="positionsView === 'closed'" class="closed-positions-panel">
+          <div class="panel-header compact">
+            <div>
+              <h3>Closed Positions</h3>
+              <p class="panel-subtitle">Filtered by close date</p>
+            </div>
+            <div class="closed-total-inline">
+              <div>
+                <span>Closed Trades</span>
+                <strong>{{ closedPositions.length }}</strong>
+              </div>
+              <div>
+                <span>Total Contracts</span>
+                <strong>{{ closedPositionsTotalQuantity }}</strong>
+              </div>
+              <div>
+                <span>Total P&L</span>
+                <strong :class="closedPositionsTotalPnl >= 0 ? 'positive' : 'negative'">
+                  {{ formatCurrency(closedPositionsTotalPnl) }}
+                </strong>
+              </div>
+            </div>
+            <div class="panel-actions">
+              <label class="date-filter">
+                <span>Day</span>
+                <input v-model="closedPositionsDate" type="date" />
+              </label>
+              <span class="count-pill">{{ closedPositions.length }}</span>
+            </div>
+          </div>
+
+          <div v-if="closedPositions.length === 0" class="empty-state">No closed positions for this day</div>
+          <div v-if="closedPositions.length !== 0" class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Closed</th>
+                  <th>Symbol</th>
+                  <th>Side</th>
+                  <th>Qty</th>
+                  <th>Entry</th>
+                  <th>Exit</th>
+                  <th>SL</th>
+                  <th>TP</th>
+                  <th>P&L</th>
+                  <th>Reason</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="position in closedPositions" :key="position.id">
+                  <td>{{ formatDateTime(position.closedAt) }}</td>
+                  <td class="symbol-cell">{{ position.symbol }}</td>
+                  <td>
+                    <span class="side-pill" :class="position.direction.toLowerCase()">{{ position.direction }}</span>
+                  </td>
+                  <td>{{ position.quantity }}</td>
+                  <td>{{ formatPrice(position.averagePrice) }}</td>
+                  <td>{{ formatPrice(position.exitPrice) }}</td>
+                  <td>{{ formatPrice(position.stopLoss) }}</td>
+                  <td>{{ formatPrice(position.takeProfit1) }}</td>
+                  <td>
+                    <strong :class="(position.realizedPnl ?? 0) >= 0 ? 'positive' : 'negative'">
+                      {{ formatCurrency(position.realizedPnl) }}
+                    </strong>
+                  </td>
+                  <td>{{ formatCloseReason(position.closeReason) }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
 
@@ -1241,6 +1503,9 @@ watch(activeTab, (tab) => {
           </div>
           <span class="status-pill" :class="riskSettings?.enable_auto_trading ? 'paper-position-opened' : 'rejected-by-risk'">
             {{ riskSettings?.enable_auto_trading ? 'Auto On' : 'Auto Off' }}
+          </span>
+          <span class="status-pill" :class="riskSettings?.stop_loss_failsafe_enabled ? 'paper-position-opened' : 'rejected-by-risk'">
+            {{ riskSettings?.stop_loss_failsafe_enabled ? 'Failsafe On' : 'Failsafe Off' }}
           </span>
         </div>
 
@@ -1486,6 +1751,18 @@ watch(activeTab, (tab) => {
             <input v-model="riskForm.emergency_stop_active" type="checkbox" />
           </label>
 
+          <div class="settings-section-title">
+            <h3>Stop Loss Failsafe</h3>
+          </div>
+
+          <label class="toggle-row">
+            <span>
+              <strong>Enable SL Failsafe</strong>
+              <small>{{ riskForm.stop_loss_failsafe_enabled ? 'Forced close if SL is crossed and position remains open' : 'Disabled' }}</small>
+            </span>
+            <input v-model="riskForm.stop_loss_failsafe_enabled" type="checkbox" />
+          </label>
+
           <div class="settings-grid">
             <label>
               <span>Max Contracts</span>
@@ -1504,8 +1781,24 @@ watch(activeTab, (tab) => {
               <input v-model.number="riskForm.max_entry_price_deviation_points" type="number" min="0" step="0.25" />
             </label>
             <label>
+              <span>Chart Market TP/SL Distance</span>
+              <input v-model.number="riskForm.chart_market_protection_distance_points" type="number" min="0.25" max="10000" step="0.25" />
+            </label>
+            <label>
               <span>Duplicate Window Seconds</span>
               <input v-model.number="riskForm.duplicate_window_seconds" type="number" min="1" max="3600" />
+            </label>
+            <label>
+              <span>Failsafe Poll Seconds</span>
+              <input v-model.number="riskForm.stop_loss_failsafe_poll_seconds" type="number" min="1" max="30" />
+            </label>
+            <label>
+              <span>Failsafe Confirm Seconds</span>
+              <input v-model.number="riskForm.stop_loss_failsafe_confirm_seconds" type="number" min="0" max="60" />
+            </label>
+            <label>
+              <span>Failsafe Cooldown Seconds</span>
+              <input v-model.number="riskForm.stop_loss_failsafe_cooldown_seconds" type="number" min="5" max="300" />
             </label>
             <label class="wide-field">
               <span>Allowed Symbols</span>
@@ -1525,5 +1818,6 @@ watch(activeTab, (tab) => {
         <div v-else class="empty-state">Loading settings</div>
       </div>
     </section>
+    </template>
   </main>
 </template>

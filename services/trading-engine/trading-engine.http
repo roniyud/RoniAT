@@ -1,4 +1,4 @@
-@trading_engine_HostAddress = http://localhost:5066
+@trading_engine_HostAddress = http://localhost:3001
 
 GET {{trading_engine_HostAddress}}/health
 Accept: application/json

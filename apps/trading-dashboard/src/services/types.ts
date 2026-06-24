@@ -83,6 +83,22 @@ export type PositionRecord = {
   updatedAt?: string | null
 }
 
+export type ClosedPositionRecord = {
+  id: number
+  symbol: string
+  direction: string
+  quantity: number
+  averagePrice: number
+  exitPrice?: number | null
+  stopLoss?: number | null
+  takeProfit1?: number | null
+  takeProfit2?: number | null
+  realizedPnl?: number | null
+  closeReason: string
+  openedAt: string
+  closedAt: string
+}
+
 export type PaperActionResult = {
   cancelledOrders: number
   closedPositions: number
@@ -140,6 +156,7 @@ export type RiskSettings = {
   max_loss_per_trade: number
   max_daily_loss: number
   max_entry_price_deviation_points: number
+  chart_market_protection_distance_points: number
   allowed_symbols: string[]
   test_mode: boolean
   ignore_tp2: boolean
@@ -149,6 +166,10 @@ export type RiskSettings = {
   allow_position_stacking: boolean
   trading_locked: boolean
   emergency_stop_active: boolean
+  stop_loss_failsafe_enabled: boolean
+  stop_loss_failsafe_poll_seconds: number
+  stop_loss_failsafe_confirm_seconds: number
+  stop_loss_failsafe_cooldown_seconds: number
 }
 
 export type AuditLogRecord = {

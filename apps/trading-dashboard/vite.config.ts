@@ -25,10 +25,10 @@ export default defineConfig({
     host: '0.0.0.0',
     port: 5173,
     proxy: {
-      '/api': 'http://localhost:5066',
-      '/health': 'http://localhost:5066',
+      '/api': 'http://localhost:3001',
+      '/health': 'http://localhost:3001',
       '/hubs': {
-        target: 'http://localhost:5066',
+        target: 'http://localhost:3001',
         ws: true,
       },
     },

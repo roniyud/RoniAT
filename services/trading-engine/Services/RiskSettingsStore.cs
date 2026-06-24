@@ -87,6 +87,7 @@ public sealed class RiskSettingsStore
             MaxLossPerTrade = settings.MaxLossPerTrade,
             MaxDailyLoss = settings.MaxDailyLoss,
             MaxEntryPriceDeviationPoints = settings.MaxEntryPriceDeviationPoints,
+            ChartMarketProtectionDistancePoints = settings.ChartMarketProtectionDistancePoints <= 0 ? 100m : settings.ChartMarketProtectionDistancePoints,
             AllowedSymbols = allowedSymbols,
             TestMode = settings.TestMode,
             IgnoreTakeProfit2 = settings.IgnoreTakeProfit2,
@@ -95,7 +96,11 @@ public sealed class RiskSettingsStore
             DuplicateWindowSeconds = settings.DuplicateWindowSeconds,
             AllowPositionStacking = settings.AllowPositionStacking,
             TradingLocked = settings.TradingLocked,
-            EmergencyStopActive = settings.EmergencyStopActive
+            EmergencyStopActive = settings.EmergencyStopActive,
+            StopLossFailsafeEnabled = settings.StopLossFailsafeEnabled,
+            StopLossFailsafePollSeconds = Math.Clamp(settings.StopLossFailsafePollSeconds, 1, 30),
+            StopLossFailsafeConfirmSeconds = Math.Clamp(settings.StopLossFailsafeConfirmSeconds, 0, 60),
+            StopLossFailsafeCooldownSeconds = Math.Clamp(settings.StopLossFailsafeCooldownSeconds, 5, 300)
         };
     }
 
@@ -123,6 +128,11 @@ public sealed class RiskSettingsStore
             errors.Add("max_entry_price_deviation_points must be between 0 and 10000");
         }
 
+        if (settings.ChartMarketProtectionDistancePoints is <= 0 or > 10_000)
+        {
+            errors.Add("chart_market_protection_distance_points must be between 0.01 and 10000");
+        }
+
         if (settings.AllowedSymbols.Length == 0)
         {
             errors.Add("allowed_symbols must include at least one symbol");
@@ -131,6 +141,21 @@ public sealed class RiskSettingsStore
         if (settings.DuplicateWindowSeconds is < 1 or > 3600)
         {
             errors.Add("duplicate_window_seconds must be between 1 and 3600");
+        }
+
+        if (settings.StopLossFailsafePollSeconds is < 1 or > 30)
+        {
+            errors.Add("stop_loss_failsafe_poll_seconds must be between 1 and 30");
+        }
+
+        if (settings.StopLossFailsafeConfirmSeconds is < 0 or > 60)
+        {
+            errors.Add("stop_loss_failsafe_confirm_seconds must be between 0 and 60");
+        }
+
+        if (settings.StopLossFailsafeCooldownSeconds is < 5 or > 300)
+        {
+            errors.Add("stop_loss_failsafe_cooldown_seconds must be between 5 and 300");
         }
 
         return errors;
@@ -144,6 +169,7 @@ public sealed class RiskSettingsStore
             MaxLossPerTrade = settings.MaxLossPerTrade,
             MaxDailyLoss = settings.MaxDailyLoss,
             MaxEntryPriceDeviationPoints = settings.MaxEntryPriceDeviationPoints,
+            ChartMarketProtectionDistancePoints = settings.ChartMarketProtectionDistancePoints,
             AllowedSymbols = settings.AllowedSymbols.ToArray(),
             TestMode = settings.TestMode,
             IgnoreTakeProfit2 = settings.IgnoreTakeProfit2,
@@ -152,7 +178,11 @@ public sealed class RiskSettingsStore
             DuplicateWindowSeconds = settings.DuplicateWindowSeconds,
             AllowPositionStacking = settings.AllowPositionStacking,
             TradingLocked = settings.TradingLocked,
-            EmergencyStopActive = settings.EmergencyStopActive
+            EmergencyStopActive = settings.EmergencyStopActive,
+            StopLossFailsafeEnabled = settings.StopLossFailsafeEnabled,
+            StopLossFailsafePollSeconds = settings.StopLossFailsafePollSeconds,
+            StopLossFailsafeConfirmSeconds = settings.StopLossFailsafeConfirmSeconds,
+            StopLossFailsafeCooldownSeconds = settings.StopLossFailsafeCooldownSeconds
         };
     }
 }

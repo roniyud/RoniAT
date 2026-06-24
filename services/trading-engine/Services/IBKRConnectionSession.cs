@@ -33,6 +33,8 @@ public sealed class IBKRConnectionSession(
     private SessionWrapper? wrapper;
     private IBKRConnectionKey? connectionKey;
     private readonly Dictionary<string, int> marketDataSubscriptions = new(StringComparer.OrdinalIgnoreCase);
+    private readonly object latestMarketTicksLock = new();
+    private readonly Dictionary<string, IBKRMarketTick> latestMarketTicks = new(StringComparer.OrdinalIgnoreCase);
 
     public async Task<BrokerConnectionTestResult> EnsureConnectedAsync(CancellationToken cancellationToken = default)
     {
@@ -245,36 +247,81 @@ public sealed class IBKRConnectionSession(
                 throw new InvalidOperationException(result.Message);
             }
 
-            var requestId = Interlocked.Increment(ref nextMarketDataRequestId);
-            var request = HistoricalDataRequest.From(symbol, timeframe);
-
-            wrapper.ResetHistoricalData(requestId);
-            EnsureMarketDataSubscriptionLocked(request.Symbol, request.Contract);
-            client.reqHistoricalData(
-                requestId,
-                request.Contract,
-                endDateTime: "",
-                durationStr: request.Duration,
-                barSizeSetting: request.BarSize,
-                whatToShow: "TRADES",
-                useRTH: 0,
-                formatDate: 2,
-                keepUpToDate: false,
-                chartOptions: []);
-
-            try
-            {
-                var candles = await wrapper.WaitForHistoricalDataAsync(requestId, HistoricalDataTimeout, cancellationToken);
-                return candles ?? [];
-            }
-            finally
-            {
-                client.cancelHistoricalData(requestId);
-            }
+            return await GetHistoricalCandlesLockedAsync(symbol, timeframe, cancellationToken);
         }
         finally
         {
             connectionLock.Release();
+        }
+    }
+
+    private async Task<IReadOnlyList<CandleResponse>> GetHistoricalCandlesLockedAsync(
+        string symbol,
+        string timeframe,
+        CancellationToken cancellationToken)
+    {
+        if (client?.IsConnected() != true || wrapper is null)
+        {
+            throw new InvalidOperationException("IBKR persistent session is not connected");
+        }
+
+        var requestId = Interlocked.Increment(ref nextMarketDataRequestId);
+        var request = HistoricalDataRequest.From(symbol, timeframe);
+
+        wrapper.ResetHistoricalData(requestId);
+        EnsureMarketDataSubscriptionLocked(request.Symbol, request.Contract);
+        client.reqHistoricalData(
+            requestId,
+            request.Contract,
+            endDateTime: "",
+            durationStr: request.Duration,
+            barSizeSetting: request.BarSize,
+            whatToShow: "TRADES",
+            useRTH: 0,
+            formatDate: 2,
+            keepUpToDate: false,
+            chartOptions: []);
+
+        try
+        {
+            var candles = await wrapper.WaitForHistoricalDataAsync(requestId, HistoricalDataTimeout, cancellationToken);
+            return candles ?? [];
+        }
+        finally
+        {
+            client.cancelHistoricalData(requestId);
+        }
+    }
+
+    public async Task EnsureStreamingMarketDataAsync(string symbol, CancellationToken cancellationToken = default)
+    {
+        await connectionLock.WaitAsync(cancellationToken);
+
+        try
+        {
+            var result = await EnsureConnectedLockedAsync(cancellationToken);
+            if (!result.HandshakeOk || client?.IsConnected() != true || wrapper is null)
+            {
+                throw new InvalidOperationException(result.Message);
+            }
+
+            var normalizedSymbol = NormalizeDisplaySymbol(symbol);
+            EnsureMarketDataSubscriptionLocked(normalizedSymbol, BuildTradableContract(normalizedSymbol));
+        }
+        finally
+        {
+            connectionLock.Release();
+        }
+    }
+
+    public IBKRLatestMarketPrice? GetLatestMarketPrice(string symbol)
+    {
+        var normalizedSymbol = NormalizeDisplaySymbol(symbol);
+        lock (latestMarketTicksLock)
+        {
+            return latestMarketTicks.TryGetValue(normalizedSymbol, out var tick)
+                ? new IBKRLatestMarketPrice(tick.Symbol, tick.Price, DateTimeOffset.FromUnixTimeSeconds(tick.Time), tick.Source)
+                : null;
         }
     }
 
@@ -504,6 +551,11 @@ public sealed class IBKRConnectionSession(
 
     private void PublishMarketTick(IBKRMarketTick tick)
     {
+        lock (latestMarketTicksLock)
+        {
+            latestMarketTicks[tick.Symbol] = tick;
+        }
+
         _ = hub.Clients.All.SendAsync("market.tick", new
         {
             symbol = tick.Symbol,
@@ -599,6 +651,10 @@ public sealed class IBKRConnectionSession(
         messagePump = null;
         connectionKey = null;
         marketDataSubscriptions.Clear();
+        lock (latestMarketTicksLock)
+        {
+            latestMarketTicks.Clear();
+        }
     }
 
     private BrokerConnectionTestResult SaveResult(BrokerConnectionTestResult result)
@@ -751,7 +807,28 @@ public sealed class IBKRConnectionSession(
             .Where(position => !activeSymbols.Contains(position.Symbol))
             .ToList())
         {
+            var inferredExit = await TryInferRecentExitAsync(stale, now, cancellationToken);
+            db.ClosedPositions.Add(new ClosedPositionRecord
+            {
+                Symbol = stale.Symbol,
+                Direction = stale.Direction,
+                Quantity = stale.Quantity,
+                AveragePrice = stale.AveragePrice,
+                ExitPrice = inferredExit?.Price,
+                StopLoss = stale.StopLoss,
+                TakeProfit1 = stale.TakeProfit1,
+                TakeProfit2 = stale.TakeProfit2,
+                RealizedPnl = inferredExit is null ? null : CalculateRealizedPnl(stale, inferredExit.Price, stale.Quantity),
+                CloseReason = inferredExit?.Reason ?? "ibkr_sync_closed",
+                OpenedAt = stale.OpenedAt,
+                ClosedAt = now
+            });
             db.Positions.Remove(stale);
+            db.AuditLogs.Add(AuditLogRecord.BrokerAction(
+                "ibkr.position_sync_closed",
+                inferredExit is null
+                    ? $"IBKR sync closed {stale.Symbol} {stale.Direction} {stale.Quantity}; exit price unavailable"
+                    : $"IBKR sync closed {stale.Symbol} {stale.Direction} {stale.Quantity}; inferred exit={inferredExit.Price} from {inferredExit.Source}"));
             changed = true;
         }
 
@@ -844,6 +921,170 @@ public sealed class IBKRConnectionSession(
             occurred_at = DateTimeOffset.UtcNow
         }, cancellationToken);
     }
+
+    private async Task<InferredExit?> TryInferRecentExitAsync(PositionRecord position, DateTimeOffset now, CancellationToken cancellationToken)
+    {
+        var latestPrice = GetLatestMarketPrice(position.Symbol);
+        if (latestPrice is not null && now - latestPrice.Time <= TimeSpan.FromMinutes(2))
+        {
+            var priceFromTick = TryInferExitFromPrice(position, latestPrice.Price);
+            if (priceFromTick is not null)
+            {
+                return priceFromTick with { Source = $"{latestPrice.Source} tick" };
+            }
+        }
+
+        try
+        {
+            var openedAt = position.OpenedAt.ToUnixTimeSeconds();
+            var closedAt = now.ToUnixTimeSeconds();
+            using var historyTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            historyTimeout.CancelAfter(TimeSpan.FromSeconds(8));
+            var candles = await GetHistoricalCandlesLockedAsync(position.Symbol, "1m", historyTimeout.Token);
+            var inferredFromCandle = candles
+                .Where(candle => candle.Time >= openedAt && candle.Time <= closedAt)
+                .Select(candle => TryInferExitFromCandle(position, candle))
+                .Where(exit => exit is not null)
+                .OrderByDescending(exit => exit!.Time)
+                .FirstOrDefault();
+
+            if (inferredFromCandle is not null)
+            {
+                return new InferredExit(
+                    inferredFromCandle.Price,
+                    inferredFromCandle.Reason,
+                    $"IBKR 1m candle {DateTimeOffset.FromUnixTimeSeconds(inferredFromCandle.Time):O}");
+            }
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            logger.LogWarning("Timed out while inferring IBKR sync close price for {Symbol}", position.Symbol);
+        }
+        catch (Exception error) when (error is not OperationCanceledException)
+        {
+            logger.LogWarning(error, "Could not infer IBKR sync close price for {Symbol}", position.Symbol);
+        }
+
+        if (latestPrice is not null && now - latestPrice.Time <= TimeSpan.FromMinutes(2))
+        {
+            return InferNearestProtectionExit(position, latestPrice.Price, $"{latestPrice.Source} tick")
+                ?? new InferredExit(latestPrice.Price, "ibkr_sync_closed_inferred_market", $"{latestPrice.Source} tick");
+        }
+
+        return InferDefaultProtectionExit(position);
+    }
+
+    private static InferredExit? TryInferExitFromPrice(PositionRecord position, decimal price)
+    {
+        if (position.Direction == "LONG")
+        {
+            if (position.TakeProfit1 is not null && price >= position.TakeProfit1) return new InferredExit(position.TakeProfit1.Value, "ibkr_sync_closed_inferred_tp", "market price");
+            if (position.StopLoss is not null && price <= position.StopLoss) return new InferredExit(position.StopLoss.Value, "ibkr_sync_closed_inferred_sl", "market price");
+        }
+        else
+        {
+            if (position.TakeProfit1 is not null && price <= position.TakeProfit1) return new InferredExit(position.TakeProfit1.Value, "ibkr_sync_closed_inferred_tp", "market price");
+            if (position.StopLoss is not null && price >= position.StopLoss) return new InferredExit(position.StopLoss.Value, "ibkr_sync_closed_inferred_sl", "market price");
+        }
+
+        return null;
+    }
+
+    private static InferredCandleExit? TryInferExitFromCandle(PositionRecord position, CandleResponse candle)
+    {
+        if (position.Direction == "LONG")
+        {
+            if (position.TakeProfit1 is not null && candle.High >= position.TakeProfit1) return new InferredCandleExit(position.TakeProfit1.Value, "ibkr_sync_closed_inferred_tp", candle.Time);
+            if (position.StopLoss is not null && candle.Low <= position.StopLoss) return new InferredCandleExit(position.StopLoss.Value, "ibkr_sync_closed_inferred_sl", candle.Time);
+        }
+        else
+        {
+            if (position.TakeProfit1 is not null && candle.Low <= position.TakeProfit1) return new InferredCandleExit(position.TakeProfit1.Value, "ibkr_sync_closed_inferred_tp", candle.Time);
+            if (position.StopLoss is not null && candle.High >= position.StopLoss) return new InferredCandleExit(position.StopLoss.Value, "ibkr_sync_closed_inferred_sl", candle.Time);
+        }
+
+        return null;
+    }
+
+    private static InferredExit? InferNearestProtectionExit(PositionRecord position, decimal price, string source)
+    {
+        if (position.StopLoss is null && position.TakeProfit1 is null)
+        {
+            return null;
+        }
+
+        if (position.StopLoss is null)
+        {
+            return new InferredExit(position.TakeProfit1!.Value, "ibkr_sync_closed_inferred_tp", $"{source}; nearest protection");
+        }
+
+        if (position.TakeProfit1 is null)
+        {
+            return new InferredExit(position.StopLoss.Value, "ibkr_sync_closed_inferred_sl", $"{source}; nearest protection");
+        }
+
+        var stopDistance = Math.Abs(price - position.StopLoss.Value);
+        var takeProfitDistance = Math.Abs(price - position.TakeProfit1.Value);
+        return stopDistance <= takeProfitDistance
+            ? new InferredExit(position.StopLoss.Value, "ibkr_sync_closed_inferred_sl", $"{source}; nearest protection")
+            : new InferredExit(position.TakeProfit1.Value, "ibkr_sync_closed_inferred_tp", $"{source}; nearest protection");
+    }
+
+    private static InferredExit? InferDefaultProtectionExit(PositionRecord position)
+    {
+        if (position.StopLoss is null && position.TakeProfit1 is null)
+        {
+            return null;
+        }
+
+        if (position.StopLoss is not null && position.TakeProfit1 is null)
+        {
+            return new InferredExit(position.StopLoss.Value, "ibkr_sync_closed_inferred_sl", "tracked stop loss fallback");
+        }
+
+        if (position.TakeProfit1 is not null && position.StopLoss is null)
+        {
+            return new InferredExit(position.TakeProfit1.Value, "ibkr_sync_closed_inferred_tp", "tracked take profit fallback");
+        }
+
+        var averagePrice = position.AveragePrice;
+        var stopDistance = Math.Abs(averagePrice - position.StopLoss!.Value);
+        var takeProfitDistance = Math.Abs(averagePrice - position.TakeProfit1!.Value);
+
+        if (stopDistance < takeProfitDistance * 0.75m)
+        {
+            return new InferredExit(position.StopLoss.Value, "ibkr_sync_closed_inferred_sl", "tracked stop loss fallback");
+        }
+
+        if (takeProfitDistance < stopDistance * 0.75m)
+        {
+            return new InferredExit(position.TakeProfit1.Value, "ibkr_sync_closed_inferred_tp", "tracked take profit fallback");
+        }
+
+        return null;
+    }
+
+    private static decimal CalculateRealizedPnl(PositionRecord position, decimal exitPrice, int closedQuantity)
+    {
+        var directionMultiplier = position.Direction == "LONG" ? 1m : -1m;
+        return (exitPrice - position.AveragePrice) * directionMultiplier * closedQuantity * GetPointValue(position.Symbol);
+    }
+
+    private static decimal GetPointValue(string symbol)
+    {
+        var normalized = symbol.Trim().ToUpperInvariant().Replace("1!", "", StringComparison.OrdinalIgnoreCase);
+        return normalized switch
+        {
+            "MNQ" => 2m,
+            "NQ" => 20m,
+            "MES" => 5m,
+            "ES" => 50m,
+            _ => 1m
+        };
+    }
+
+    private sealed record InferredExit(decimal Price, string Reason, string Source);
+    private sealed record InferredCandleExit(decimal Price, string Reason, long Time);
 
     private void CancelTrackedWorkingOrders(IReadOnlyList<OrderRecord> orders)
     {
@@ -1455,6 +1696,8 @@ public sealed class IBKRConnectionSession(
 
     private sealed record IBKRMarketTick(string Symbol, decimal Price, long Time, string Source);
 }
+
+public sealed record IBKRLatestMarketPrice(string Symbol, decimal Price, DateTimeOffset Time, string Source);
 
 public sealed record IBKRSubmittedOrder(
     int OrderId,

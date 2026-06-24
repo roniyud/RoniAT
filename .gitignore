@@ -25,6 +25,7 @@ TestResults/
 .env
 .env.*
 !.env.example
+scripts/*.local.ps1
 
 # IDE/workspace local state
 .vs/

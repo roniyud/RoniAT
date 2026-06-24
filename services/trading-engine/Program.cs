@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.AspNetCore.SignalR;
+using Microsoft.Extensions.FileProviders;
 using RoniAT.TradingEngine.Contracts;
 using RoniAT.TradingEngine.Data;
 using RoniAT.TradingEngine.Hubs;
@@ -15,12 +16,23 @@ builder.Services.AddCors(options =>
 {
     options.AddPolicy("Dashboard", policy =>
     {
-        policy
-            .WithOrigins(
+        var configuredOrigins = builder.Configuration
+            .GetSection("Dashboard:AllowedOrigins")
+            .Get<string[]>() ?? [];
+        var origins = new[]
+            {
                 "http://localhost:5173",
                 "http://127.0.0.1:5173",
                 "http://localhost:4173",
-                "http://127.0.0.1:4173")
+                "http://127.0.0.1:4173"
+            }
+            .Concat(configuredOrigins)
+            .Where(origin => !string.IsNullOrWhiteSpace(origin))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        policy
+            .WithOrigins(origins)
             .WithExposedHeaders("X-Market-Data-Source", "X-Market-Data-Warning")
             .AllowAnyHeader()
             .AllowAnyMethod()
@@ -55,6 +67,7 @@ builder.Services.PostConfigure<RiskSettings>(settings =>
     }
 });
 builder.Services.AddSingleton<RiskSettingsStore>();
+builder.Services.AddSingleton<DashboardAuthService>();
 builder.Services.AddSingleton<DailyPerformanceStore>();
 builder.Services.AddScoped<RiskValidator>();
 builder.Services.Configure<BrokerSettings>(options =>
@@ -85,6 +98,7 @@ builder.Services.AddSingleton<BrokerSettingsStore>();
 builder.Services.AddSingleton<BrokerConnectionStateStore>();
 builder.Services.AddSingleton<IBKRConnectionSession>();
 builder.Services.AddHostedService(serviceProvider => serviceProvider.GetRequiredService<IBKRConnectionSession>());
+builder.Services.AddHostedService<StopLossFailsafeService>();
 builder.Services.AddScoped<IBKRConnectionTester>();
 builder.Services.AddScoped<PaperBrokerAdapter>();
 builder.Services.AddScoped<IBKRBrokerAdapter>();
@@ -94,11 +108,21 @@ builder.Services.AddSingleton<MockMarketDataProvider>();
 builder.Services.AddSingleton<IMarketDataProvider, IBKRMarketDataProvider>();
 
 var app = builder.Build();
+var dashboardDistPath = Path.GetFullPath(Path.Combine(
+    app.Environment.ContentRootPath,
+    "..",
+    "..",
+    "apps",
+    "trading-dashboard",
+    "dist"));
+var dashboardIndexPath = Path.Combine(dashboardDistPath, "index.html");
+var hasBuiltDashboard = File.Exists(dashboardIndexPath);
 
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<TradingDbContext>();
     await db.Database.EnsureCreatedAsync();
+    await EnsureClosedPositionsTableAsync(db);
     await db.Database.ExecuteSqlRawAsync("PRAGMA journal_mode=WAL;");
 }
 
@@ -108,11 +132,66 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI();
 }
 
+if (hasBuiltDashboard)
+{
+    var dashboardFileProvider = new PhysicalFileProvider(dashboardDistPath);
+    app.UseDefaultFiles(new DefaultFilesOptions
+    {
+        FileProvider = dashboardFileProvider
+    });
+    app.UseStaticFiles(new StaticFileOptions
+    {
+        FileProvider = dashboardFileProvider
+    });
+}
+
 app.UseCors("Dashboard");
+
+app.Use(async (context, next) =>
+{
+    var path = context.Request.Path;
+    var requiresAuth = path.StartsWithSegments("/api") || path.StartsWithSegments("/hubs/trading");
+    var isAuthEndpoint = path.StartsWithSegments("/api/auth");
+
+    if (!requiresAuth || isAuthEndpoint)
+    {
+        await next();
+        return;
+    }
+
+    var authService = context.RequestServices.GetRequiredService<DashboardAuthService>();
+    var token = ReadBearerToken(context);
+    if (!authService.IsValidToken(token))
+    {
+        context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+        await context.Response.WriteAsJsonAsync(new { message = "Unauthorized" });
+        return;
+    }
+
+    await next();
+});
 
 app.MapGet("/health", () => Results.Ok(new { status = "ok", service = "trading-engine" }))
     .WithName("Health")
     .WithOpenApi();
+
+app.MapPost("/api/auth/login", (LoginRequest request, DashboardAuthService authService) =>
+{
+    var result = authService.Login(request.Username, request.Password);
+    return result.Ok
+        ? Results.Ok(new LoginResponse(true, result.Token, result.ExpiresAt, result.Message))
+        : Results.Unauthorized();
+})
+.WithName("Login")
+.WithOpenApi();
+
+app.MapPost("/api/auth/logout", (HttpContext context, DashboardAuthService authService) =>
+{
+    authService.Logout(ReadBearerToken(context));
+    return Results.Ok(new { ok = true });
+})
+.WithName("Logout")
+.WithOpenApi();
 
 app.MapHub<TradingHub>("/hubs/trading");
 
@@ -189,6 +268,21 @@ app.MapGet("/api/positions", async (TradingDbContext db) =>
 .WithName("GetPositions")
 .WithOpenApi();
 
+app.MapGet("/api/positions/closed", async (string? date, TradingDbContext db) =>
+{
+    var filterDate = ParseDateOnly(date) ?? DateOnly.FromDateTime(DateTime.Now);
+
+    var closedPositions = (await db.ClosedPositions.ToListAsync())
+        .Where(position => DateOnly.FromDateTime(position.ClosedAt.LocalDateTime) == filterDate)
+        .OrderByDescending(position => position.ClosedAt)
+        .Take(500)
+        .ToList();
+
+    return Results.Ok(closedPositions);
+})
+.WithName("GetClosedPositions")
+.WithOpenApi();
+
 app.MapGet("/api/audit-logs", async (TradingDbContext db) =>
 {
     var auditLogs = await db.AuditLogs
@@ -202,9 +296,9 @@ app.MapGet("/api/audit-logs", async (TradingDbContext db) =>
 .WithName("GetAuditLogs")
 .WithOpenApi();
 
-app.MapGet("/api/performance/daily", (DailyPerformanceStore dailyPerformanceStore) =>
+app.MapGet("/api/performance/daily", async (TradingDbContext db) =>
 {
-    var snapshot = dailyPerformanceStore.GetToday();
+    var snapshot = await GetDailyPerformanceAsync(db, DateOnly.FromDateTime(DateTime.Now));
     return Results.Ok(new
     {
         date = snapshot.Date.ToString("yyyy-MM-dd"),
@@ -229,7 +323,9 @@ app.MapGet("/api/market-data/candles", async (
 
     try
     {
-        var candles = await marketDataProvider.GetCandlesAsync(normalizedSymbol, normalizedTimeframe, cancellationToken);
+        using var marketDataTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        marketDataTimeout.CancelAfter(TimeSpan.FromSeconds(8));
+        var candles = await marketDataProvider.GetCandlesAsync(normalizedSymbol, normalizedTimeframe, marketDataTimeout.Token);
         httpContext.Response.Headers["X-Market-Data-Source"] = "ibkr";
         return Results.Ok(candles);
     }
@@ -237,21 +333,43 @@ app.MapGet("/api/market-data/candles", async (
     {
         return Results.BadRequest(new ValidationErrorResponse([error.Message]));
     }
-    catch (InvalidOperationException error)
+    catch (Exception error) when (error is InvalidOperationException or OperationCanceledException)
     {
         var anchorPrice = await db.Positions
             .Where(position => position.Symbol == normalizedSymbol)
             .Select(position => (decimal?)position.AveragePrice)
-            .SingleOrDefaultAsync(cancellationToken);
+            .SingleOrDefaultAsync(CancellationToken.None);
 
         var fallbackCandles = fallbackProvider.GetCandles(normalizedSymbol, normalizedTimeframe, anchorPrice);
         httpContext.Response.Headers["X-Market-Data-Source"] = "fallback";
-        httpContext.Response.Headers["X-Market-Data-Warning"] = error.Message;
+        httpContext.Response.Headers["X-Market-Data-Warning"] = error is OperationCanceledException
+            ? "IBKR market data timed out; showing fallback candles"
+            : error.Message;
 
         return Results.Ok(fallbackCandles);
     }
 })
 .WithName("GetCandles")
+.WithOpenApi();
+
+app.MapPost("/api/market-data/stream", async (
+    MarketDataStreamRequest request,
+    IBKRConnectionSession connectionSession,
+    CancellationToken cancellationToken) =>
+{
+    var normalizedSymbol = string.IsNullOrWhiteSpace(request.Symbol)
+        ? "MNQ1!"
+        : request.Symbol.Trim().ToUpperInvariant();
+
+    await connectionSession.EnsureStreamingMarketDataAsync(normalizedSymbol, cancellationToken);
+
+    return Results.Ok(new
+    {
+        ok = true,
+        symbol = normalizedSymbol
+    });
+})
+.WithName("StartMarketDataStream")
 .WithOpenApi();
 
 app.MapGet("/api/broker", (IBrokerAdapter brokerAdapter) => Results.Ok(BrokerStatusResponse.FromStatus(brokerAdapter.GetStatus())))
@@ -340,6 +458,7 @@ app.MapPut("/api/risk/settings", async (RiskSettingsUpdateRequest request, RiskS
         MaxLossPerTrade = request.MaxLossPerTrade,
         MaxDailyLoss = request.MaxDailyLoss,
         MaxEntryPriceDeviationPoints = request.MaxEntryPriceDeviationPoints,
+        ChartMarketProtectionDistancePoints = request.ChartMarketProtectionDistancePoints,
         AllowedSymbols = request.AllowedSymbols.ToArray(),
         TestMode = request.TestMode,
         IgnoreTakeProfit2 = request.IgnoreTakeProfit2,
@@ -348,7 +467,11 @@ app.MapPut("/api/risk/settings", async (RiskSettingsUpdateRequest request, RiskS
         DuplicateWindowSeconds = request.DuplicateWindowSeconds,
         AllowPositionStacking = request.AllowPositionStacking,
         TradingLocked = request.TradingLocked,
-        EmergencyStopActive = request.EmergencyStopActive
+        EmergencyStopActive = request.EmergencyStopActive,
+        StopLossFailsafeEnabled = request.StopLossFailsafeEnabled,
+        StopLossFailsafePollSeconds = request.StopLossFailsafePollSeconds,
+        StopLossFailsafeConfirmSeconds = request.StopLossFailsafeConfirmSeconds,
+        StopLossFailsafeCooldownSeconds = request.StopLossFailsafeCooldownSeconds
     });
 
     if (!result.Ok)
@@ -525,6 +648,22 @@ app.MapPost("/api/paper/flatten", async (TradingDbContext db, IBrokerAdapter bro
 .WithName("FlattenPaperAccount")
 .WithOpenApi();
 
+if (hasBuiltDashboard)
+{
+    app.MapFallback(async context =>
+    {
+        var path = context.Request.Path;
+        if (path.StartsWithSegments("/api") || path.StartsWithSegments("/hubs") || path.StartsWithSegments("/health"))
+        {
+            context.Response.StatusCode = StatusCodes.Status404NotFound;
+            return;
+        }
+
+        context.Response.ContentType = "text/html; charset=utf-8";
+        await context.Response.SendFileAsync(dashboardIndexPath);
+    });
+}
+
 app.Run();
 
 static string? GetSqlitePath(string connectionString, string contentRootPath)
@@ -583,6 +722,55 @@ static Task BroadcastTradingUpdateAsync(IHubContext<TradingHub> hub, string even
         symbol,
         occurred_at = DateTimeOffset.UtcNow
     });
+}
+
+static string? ReadBearerToken(HttpContext context)
+{
+    var authorization = context.Request.Headers.Authorization.ToString();
+    if (authorization.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
+    {
+        return authorization["Bearer ".Length..].Trim();
+    }
+
+    return context.Request.Query.TryGetValue("access_token", out var queryToken)
+        ? queryToken.ToString()
+        : null;
+}
+
+static async Task EnsureClosedPositionsTableAsync(TradingDbContext db)
+{
+    await db.Database.ExecuteSqlRawAsync("""
+        CREATE TABLE IF NOT EXISTS "closed_positions" (
+            "Id" INTEGER NOT NULL CONSTRAINT "PK_closed_positions" PRIMARY KEY AUTOINCREMENT,
+            "Symbol" TEXT NOT NULL,
+            "Direction" TEXT NOT NULL,
+            "Quantity" INTEGER NOT NULL,
+            "AveragePrice" TEXT NOT NULL,
+            "ExitPrice" TEXT NULL,
+            "StopLoss" TEXT NULL,
+            "TakeProfit1" TEXT NULL,
+            "TakeProfit2" TEXT NULL,
+            "RealizedPnl" TEXT NULL,
+            "CloseReason" TEXT NOT NULL,
+            "OpenedAt" TEXT NOT NULL,
+            "ClosedAt" TEXT NOT NULL
+        );
+        """);
+
+    await db.Database.ExecuteSqlRawAsync("""
+        CREATE INDEX IF NOT EXISTS "IX_closed_positions_ClosedAt"
+        ON "closed_positions" ("ClosedAt");
+        """);
+
+    await db.Database.ExecuteSqlRawAsync("""
+        CREATE INDEX IF NOT EXISTS "IX_closed_positions_Symbol"
+        ON "closed_positions" ("Symbol");
+        """);
+}
+
+static DateOnly? ParseDateOnly(string? value)
+{
+    return DateOnly.TryParse(value, out var parsed) ? parsed : null;
 }
 
 static async Task<IResult> ProcessMarketOrderAsync(MarketOrderRequest request, TradingDbContext db, IBrokerAdapter brokerAdapter, RiskSettingsStore riskSettingsStore, DailyPerformanceStore dailyPerformanceStore, IHubContext<TradingHub> hub)
@@ -701,7 +889,7 @@ static async Task<MarketOrderValidationResult> ValidateMarketOrderAsync(MarketOr
     if (settings.MaxDailyLoss > 0 && request.AttachProtection == true && request.ProtectionDistance is > 0 && contracts is > 0 && !string.IsNullOrWhiteSpace(symbol))
     {
         var projectedLoss = request.ProtectionDistance.Value * contracts.Value * GetPointValue(symbol);
-        var today = dailyPerformanceStore.GetToday();
+        var today = await GetDailyPerformanceAsync(db, DateOnly.FromDateTime(DateTime.Now));
         var currentLoss = Math.Max(0m, -today.RealizedPnl);
         if (currentLoss >= settings.MaxDailyLoss)
         {
@@ -727,6 +915,19 @@ static decimal GetPointValue(string symbol)
         "ES" => 50m,
         _ => 1m
     };
+}
+
+static async Task<DailyPerformanceSnapshot> GetDailyPerformanceAsync(TradingDbContext db, DateOnly date)
+{
+    var closedPositions = await db.ClosedPositions.ToListAsync();
+    var todayClosedPositions = closedPositions
+        .Where(position => DateOnly.FromDateTime(position.ClosedAt.LocalDateTime) == date)
+        .ToList();
+
+    return new DailyPerformanceSnapshot(
+        date,
+        todayClosedPositions.Sum(position => position.RealizedPnl ?? 0m),
+        todayClosedPositions.Count);
 }
 
 static async Task<IResult> ProcessSignalAsync(TradingSignalRequest request, bool isManualTrade, TradingDbContext db, IBrokerAdapter brokerAdapter, RiskValidator riskValidator, RiskSettingsStore riskSettingsStore, IMarketDataProvider marketDataProvider, IHubContext<TradingHub> hub)
@@ -763,6 +964,8 @@ static async Task<IResult> ProcessSignalAsync(TradingSignalRequest request, bool
         db.AuditLogs.Add(AuditLogRecord.ManualTradeSubmitted(signal));
     }
 
+    try
+    {
     var riskValidation = await riskValidator.ValidateEntrySignalAsync(signal, db);
     if (!riskValidation.IsApproved)
     {
@@ -841,6 +1044,19 @@ static async Task<IResult> ProcessSignalAsync(TradingSignalRequest request, bool
     await BroadcastTradingUpdateAsync(hub, eventType, signal.Symbol);
 
     return Results.Created($"/api/signals/{signal.Id}", TradingSignalResponse.FromRecord(signal));
+    }
+    catch (Exception error)
+    {
+        signal.Status = "broker_blocked";
+        db.AuditLogs.Add(AuditLogRecord.BrokerAction(
+            "signal.processing_failed",
+            $"Signal {signal.Id} {signal.Symbol} failed after acceptance: {error.Message}"));
+        await db.SaveChangesAsync();
+
+        await BroadcastTradingUpdateAsync(hub, isManualTrade ? "manual_trade.broker_blocked" : "signal.broker_blocked", signal.Symbol);
+
+        return Results.Created($"/api/signals/{signal.Id}", TradingSignalResponse.FromRecord(signal));
+    }
 }
 
 static int CalculateSignalContracts(TradingSignalRecord signal, RiskSettings settings)

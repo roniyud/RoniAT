@@ -31,7 +31,7 @@ Start the WhatsApp listener in a second terminal:
 
 ```powershell
 cd D:\RONI\RoniAT\apps\whatsapp-listener
-$env:TRADING_ENGINE_URL='http://localhost:5066'
+$env:TRADING_ENGINE_URL='http://localhost:3001'
 npm start
 ```
 
@@ -47,6 +47,72 @@ Dashboard URL:
 ```text
 http://localhost:5173
 ```
+
+Default dashboard login:
+
+```text
+Username: admin
+Password: ChangeMe123!
+```
+
+Before exposing the dashboard outside the local network, change the password in `services/trading-engine/appsettings.json` or set an environment variable before starting the trading engine:
+
+```powershell
+$env:DashboardAuth__Password='your-strong-password'
+dotnet run
+```
+
+The dashboard stores a temporary login token in the browser. API calls and the realtime SignalR connection require that token.
+
+If the dashboard and API are exposed on different origins, add the public dashboard origin before starting the trading engine:
+
+```powershell
+$env:Dashboard__AllowedOrigins__0='https://your-dashboard-domain.com'
+```
+
+The WhatsApp listener also needs the same credentials:
+
+```powershell
+$env:TRADING_ENGINE_USERNAME='admin'
+$env:TRADING_ENGINE_PASSWORD='your-strong-password'
+```
+
+Local startup script:
+
+```powershell
+.\scripts\start-roniat.local.ps1 -RestartTradingEngine
+.\scripts\start-roniat.local.ps1 -RestartTradingEngine -WithWhatsApp
+```
+
+`scripts/start-roniat.local.ps1` is ignored by git because it contains local credentials. Use `scripts/start-roniat.example.ps1` as the committed template.
+
+## Public Port Access
+
+For access from outside the local network, prefer exposing only the trading engine port. In this mode the Vue dashboard is built once and served by the .NET trading engine, so dashboard, API, and SignalR all use the same port:
+
+```powershell
+.\scripts\start-roniat.local.ps1 -RestartTradingEngine -PublicDashboard -WithWhatsApp
+```
+
+Local URL:
+
+```text
+http://localhost:3001
+```
+
+LAN URL:
+
+```text
+http://<computer-lan-ip>:3001
+```
+
+Open Windows Firewall from an elevated PowerShell:
+
+```powershell
+.\scripts\open-public-port-3001.ps1
+```
+
+Then configure the router to forward external TCP port `3001` to this computer's LAN IP on internal TCP port `3001`. If using a domain, point the domain DNS record to the public IP of the router. Do not expose the Vite development port `5173` to the internet.
 
 The dashboard Chart tab reads candles from the trading engine:
 
@@ -137,6 +203,19 @@ IBKR skeleton settings:
 Risk validation runs before any signal reaches the broker adapter. Current defaults allow only `MNQ1!`, up to 7 contracts per signal, reject duplicate signals inside a short window, and reject new entries while an open position already exists for the same symbol. Rejected signals are still saved with status `rejected_by_risk`, but no broker orders are created.
 
 Risk settings endpoint:
+
+Stop-loss failsafe:
+
+```json
+"StopLossFailsafe": {
+  "Enabled": true,
+  "PollSeconds": 1,
+  "ConfirmSeconds": 2,
+  "CooldownSeconds": 15
+}
+```
+
+When IBKR mode is active, the trading engine subscribes to live market ticks for open system positions with an SL. If price remains beyond the SL for the confirmation delay and the system position still exists, RoniAT sends a forced close for that symbol and writes a failsafe audit event.
 
 ```text
 GET /api/risk/settings

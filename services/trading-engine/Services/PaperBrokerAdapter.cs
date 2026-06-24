@@ -271,6 +271,8 @@ public sealed class PaperBrokerAdapter(
         });
 
         var cancelled = await CancelWorkingOrdersAsync(normalizedSymbol, db);
+        RecordClosedPosition(db, position, position.Quantity, closePrice, now, "manual_close");
+        dailyPerformanceStore.AddRealizedPnl(CalculateRealizedPnl(position, closePrice, position.Quantity));
         db.Positions.Remove(position);
         db.AuditLogs.Add(AuditLogRecord.PaperAction(
             "paper.position_closed",
@@ -442,18 +444,25 @@ public sealed class PaperBrokerAdapter(
         }
         else if (contracts < existing.Quantity)
         {
-            dailyPerformanceStore.AddRealizedPnl(CalculateRealizedPnl(existing, fillPrice, contracts));
+            var realizedPnl = CalculateRealizedPnl(existing, fillPrice, contracts);
+            dailyPerformanceStore.AddRealizedPnl(realizedPnl);
+            RecordClosedPosition(db, existing, contracts, fillPrice, now, "partial_close");
             existing.Quantity -= contracts;
         }
         else if (contracts == existing.Quantity)
         {
-            dailyPerformanceStore.AddRealizedPnl(CalculateRealizedPnl(existing, fillPrice, contracts));
+            var realizedPnl = CalculateRealizedPnl(existing, fillPrice, contracts);
+            dailyPerformanceStore.AddRealizedPnl(realizedPnl);
+            RecordClosedPosition(db, existing, contracts, fillPrice, now, "market_close");
             db.Positions.Remove(existing);
             return null;
         }
         else
         {
-            dailyPerformanceStore.AddRealizedPnl(CalculateRealizedPnl(existing, fillPrice, existing.Quantity));
+            var closedQuantity = existing.Quantity;
+            var realizedPnl = CalculateRealizedPnl(existing, fillPrice, closedQuantity);
+            dailyPerformanceStore.AddRealizedPnl(realizedPnl);
+            RecordClosedPosition(db, existing, closedQuantity, fillPrice, now, "reverse_close");
             existing.Quantity = contracts - existing.Quantity;
             existing.Direction = direction;
             existing.AveragePrice = fillPrice;
@@ -490,6 +499,25 @@ public sealed class PaperBrokerAdapter(
     {
         var directionMultiplier = position.Direction == "LONG" ? 1m : -1m;
         return (exitPrice - position.AveragePrice) * directionMultiplier * closedQuantity * GetPointValue(position.Symbol);
+    }
+
+    private static void RecordClosedPosition(TradingDbContext db, PositionRecord position, int closedQuantity, decimal exitPrice, DateTimeOffset closedAt, string closeReason)
+    {
+        db.ClosedPositions.Add(new ClosedPositionRecord
+        {
+            Symbol = position.Symbol,
+            Direction = position.Direction,
+            Quantity = closedQuantity,
+            AveragePrice = position.AveragePrice,
+            ExitPrice = exitPrice,
+            StopLoss = position.StopLoss,
+            TakeProfit1 = position.TakeProfit1,
+            TakeProfit2 = position.TakeProfit2,
+            RealizedPnl = CalculateRealizedPnl(position, exitPrice, closedQuantity),
+            CloseReason = closeReason,
+            OpenedAt = position.OpenedAt,
+            ClosedAt = closedAt
+        });
     }
 
     private static decimal GetPointValue(string symbol)

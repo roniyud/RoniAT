@@ -9,6 +9,7 @@ public sealed class TradingDbContext(DbContextOptions<TradingDbContext> options)
     public DbSet<OrderRecord> Orders => Set<OrderRecord>();
     public DbSet<ExecutionRecord> Executions => Set<ExecutionRecord>();
     public DbSet<PositionRecord> Positions => Set<PositionRecord>();
+    public DbSet<ClosedPositionRecord> ClosedPositions => Set<ClosedPositionRecord>();
     public DbSet<BrokerEventRecord> BrokerEvents => Set<BrokerEventRecord>();
     public DbSet<AuditLogRecord> AuditLogs => Set<AuditLogRecord>();
 
@@ -52,6 +53,17 @@ public sealed class TradingDbContext(DbContextOptions<TradingDbContext> options)
             entity.Property(position => position.Symbol).HasMaxLength(32).IsRequired();
             entity.Property(position => position.Direction).HasMaxLength(8).IsRequired();
             entity.HasIndex(position => position.Symbol).IsUnique();
+        });
+
+        modelBuilder.Entity<ClosedPositionRecord>(entity =>
+        {
+            entity.ToTable("closed_positions");
+            entity.HasKey(position => position.Id);
+            entity.Property(position => position.Symbol).HasMaxLength(32).IsRequired();
+            entity.Property(position => position.Direction).HasMaxLength(8).IsRequired();
+            entity.Property(position => position.CloseReason).HasMaxLength(64).IsRequired();
+            entity.HasIndex(position => position.ClosedAt);
+            entity.HasIndex(position => position.Symbol);
         });
 
         modelBuilder.Entity<BrokerEventRecord>(entity =>

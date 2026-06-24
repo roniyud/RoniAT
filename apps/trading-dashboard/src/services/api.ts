@@ -1,6 +1,53 @@
-import type { AuditLogRecord, BrokerConnectionTestResult, BrokerMode, BrokerSettings, DailyPerformance, MarketOrderRequest, MarketOrderResponse, OrderRecord, PaperActionResult, PositionRecord, ProtectionUpdateRequest, ProtectionUpdateResponse, RiskSettings, TradingSignal, TradingSignalRequest } from './types'
+import type { AuditLogRecord, BrokerConnectionTestResult, BrokerMode, BrokerSettings, ClosedPositionRecord, DailyPerformance, MarketOrderRequest, MarketOrderResponse, OrderRecord, PaperActionResult, PositionRecord, ProtectionUpdateRequest, ProtectionUpdateResponse, RiskSettings, TradingSignal, TradingSignalRequest } from './types'
 
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/+$/, '')
+const AUTH_TOKEN_KEY = 'roniat.auth.token'
+
+export function getAuthToken() {
+  return window.localStorage.getItem(AUTH_TOKEN_KEY)
+}
+
+export function isAuthenticated() {
+  return Boolean(getAuthToken())
+}
+
+export async function login(username: string, password: string) {
+  const response = await fetch(`${API_BASE_URL}/api/auth/login`, {
+    method: 'POST',
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ username, password }),
+  })
+
+  if (!response.ok) {
+    throw new Error(response.status === 401 ? 'Invalid username or password' : `HTTP ${response.status} from Trading Engine`)
+  }
+
+  const payload = await response.json() as { token?: string }
+  if (!payload.token) {
+    throw new Error('Login did not return a token')
+  }
+
+  window.localStorage.setItem(AUTH_TOKEN_KEY, payload.token)
+  return payload
+}
+
+export async function logout() {
+  const token = getAuthToken()
+  window.localStorage.removeItem(AUTH_TOKEN_KEY)
+
+  if (!token) return
+
+  await fetch(`${API_BASE_URL}/api/auth/logout`, {
+    method: 'POST',
+    headers: {
+      Accept: 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+  }).catch(() => undefined)
+}
 
 export async function getHealth() {
   return request<{ status: string; service: string }>('/health')
@@ -18,6 +65,12 @@ export async function getOrders() {
 export async function getPositions() {
   const positions = normalizeCollection<Record<string, unknown>>(await request<Record<string, unknown>[] | { value: Record<string, unknown>[] }>('/api/positions'))
   return positions.map(mapPosition)
+}
+
+export async function getClosedPositions(date: string) {
+  const params = new URLSearchParams({ date })
+  const positions = normalizeCollection<Record<string, unknown>>(await request<Record<string, unknown>[] | { value: Record<string, unknown>[] }>(`/api/positions/closed?${params.toString()}`))
+  return positions.map(mapClosedPosition)
 }
 
 export async function getAuditLogs() {
@@ -42,6 +95,7 @@ export async function updateBrokerSettings(settings: BrokerSettings) {
     headers: {
       Accept: 'application/json',
       'Content-Type': 'application/json',
+      ...authHeaders(),
     },
     body: JSON.stringify(settings),
   })
@@ -59,6 +113,7 @@ export async function testBrokerConnection() {
     headers: {
       Accept: 'application/json',
       'Content-Type': 'application/json',
+      ...authHeaders(),
     },
     body: JSON.stringify({}),
   })
@@ -80,6 +135,7 @@ export async function updateRiskSettings(settings: RiskSettings) {
     headers: {
       Accept: 'application/json',
       'Content-Type': 'application/json',
+      ...authHeaders(),
     },
     body: JSON.stringify(settings),
   })
@@ -97,6 +153,7 @@ export async function submitManualTrade(trade: TradingSignalRequest) {
     headers: {
       Accept: 'application/json',
       'Content-Type': 'application/json',
+      ...authHeaders(),
     },
     body: JSON.stringify(trade),
   })
@@ -114,6 +171,7 @@ export async function submitMarketOrder(order: MarketOrderRequest) {
     headers: {
       Accept: 'application/json',
       'Content-Type': 'application/json',
+      ...authHeaders(),
     },
     body: JSON.stringify(order),
   })
@@ -142,6 +200,7 @@ export async function emergencyStop() {
     headers: {
       Accept: 'application/json',
       'Content-Type': 'application/json',
+      ...authHeaders(),
     },
     body: JSON.stringify({}),
   })
@@ -176,6 +235,7 @@ export async function updateProtection(update: ProtectionUpdateRequest) {
     headers: {
       Accept: 'application/json',
       'Content-Type': 'application/json',
+      ...authHeaders(),
     },
     body: JSON.stringify(update),
   })
@@ -197,6 +257,7 @@ async function request<T>(path: string): Promise<T> {
   const response = await fetch(`${API_BASE_URL}${path}`, {
     headers: {
       Accept: 'application/json',
+      ...authHeaders(),
     },
   })
 
@@ -213,6 +274,7 @@ async function postSafetyAction(path: string): Promise<RiskSettings> {
     headers: {
       Accept: 'application/json',
       'Content-Type': 'application/json',
+      ...authHeaders(),
     },
     body: JSON.stringify({}),
   })
@@ -230,6 +292,7 @@ async function postBrokerAction(path: string, body: Record<string, unknown>): Pr
     headers: {
       Accept: 'application/json',
       'Content-Type': 'application/json',
+      ...authHeaders(),
     },
     body: JSON.stringify(body),
   })
@@ -244,6 +307,11 @@ async function postBrokerAction(path: string, body: Record<string, unknown>): Pr
     cancelledOrders: readNumber(payload, 'cancelledOrders', 'CancelledOrders'),
     closedPositions: readNumber(payload, 'closedPositions', 'ClosedPositions'),
   }
+}
+
+function authHeaders(): Record<string, string> {
+  const token = getAuthToken()
+  return token ? { Authorization: `Bearer ${token}` } : {}
 }
 
 function normalizeCollection<T>(payload: T[] | { value: T[] }) {
@@ -279,6 +347,24 @@ function mapPosition(record: Record<string, unknown>): PositionRecord {
     takeProfit2: readOptionalNumber(record, 'takeProfit2', 'TakeProfit2'),
     openedAt: readOptionalString(record, 'openedAt', 'OpenedAt'),
     updatedAt: readOptionalString(record, 'updatedAt', 'UpdatedAt'),
+  }
+}
+
+function mapClosedPosition(record: Record<string, unknown>): ClosedPositionRecord {
+  return {
+    id: readNumber(record, 'id', 'Id'),
+    symbol: readString(record, 'symbol', 'Symbol'),
+    direction: readString(record, 'direction', 'Direction'),
+    quantity: readNumber(record, 'quantity', 'Quantity'),
+    averagePrice: readNumber(record, 'averagePrice', 'AveragePrice'),
+    exitPrice: readOptionalNumber(record, 'exitPrice', 'ExitPrice'),
+    stopLoss: readOptionalNumber(record, 'stopLoss', 'StopLoss'),
+    takeProfit1: readOptionalNumber(record, 'takeProfit1', 'TakeProfit1'),
+    takeProfit2: readOptionalNumber(record, 'takeProfit2', 'TakeProfit2'),
+    realizedPnl: readOptionalNumber(record, 'realizedPnl', 'RealizedPnl'),
+    closeReason: readString(record, 'closeReason', 'CloseReason'),
+    openedAt: readString(record, 'openedAt', 'OpenedAt'),
+    closedAt: readString(record, 'closedAt', 'ClosedAt'),
   }
 }
 

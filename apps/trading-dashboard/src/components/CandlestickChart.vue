@@ -28,6 +28,8 @@ type ActiveTrade = {
   averagePrice: number
   currentPrice: number | null
   estimatedPnl: number | null
+  maxProfit: number | null
+  maxLoss: number | null
   stopLoss?: number | null
   takeProfit1?: number | null
   takeProfit2?: number | null
@@ -140,6 +142,23 @@ function toLineStyle(style: ChartPriceLevel['style']) {
   return LineStyle.Solid
 }
 
+function toLineWidth(level: ChartPriceLevel) {
+  if (level.label === 'Avg') return 1
+  if (level.style === 'dotted') return 1
+  return 2
+}
+
+function uniquePriceLevels(levels: ChartPriceLevel[]) {
+  const seen = new Set<string>()
+  return levels.filter((level) => {
+    if (!Number.isFinite(level.price)) return false
+    const key = `${level.label}:${level.price.toFixed(2)}`
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}
+
 function syncPriceLines() {
   if (!candleSeries) return
 
@@ -147,13 +166,12 @@ function syncPriceLines() {
     candleSeries.removePriceLine(priceLine)
   }
 
-  priceLines = props.levels
-    .filter((level) => Number.isFinite(level.price))
+  priceLines = uniquePriceLevels(props.levels)
     .map((level) =>
       candleSeries!.createPriceLine({
         price: level.price,
         color: level.color,
-        lineWidth: 2,
+        lineWidth: toLineWidth(level),
         lineStyle: toLineStyle(level.style),
         axisLabelVisible: true,
         title: level.label,
@@ -174,7 +192,7 @@ function syncPreviewPriceLine() {
   previewPriceLine = candleSeries.createPriceLine({
     price: lastDragPrice,
     color: dragTargetColor || '#0f766e',
-    lineWidth: 3,
+    lineWidth: 2,
     lineStyle: LineStyle.Solid,
     axisLabelVisible: true,
     title: `${dragTargetLabel} ${lastDragPrice.toFixed(2)}`,
@@ -407,6 +425,14 @@ onUnmounted(() => {
         <div>
           <span>P&L Est.</span>
           <strong :class="tradePnlClass">{{ formatCurrency(activeTrade.estimatedPnl) }}</strong>
+        </div>
+        <div>
+          <span>Max Profit</span>
+          <strong class="positive">{{ formatCurrency(activeTrade.maxProfit) }}</strong>
+        </div>
+        <div>
+          <span>Max Loss</span>
+          <strong class="negative">{{ formatCurrency(activeTrade.maxLoss) }}</strong>
         </div>
         <div>
           <span>SL</span>

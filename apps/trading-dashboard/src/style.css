@@ -42,6 +42,12 @@ button {
   padding: 12px 0 18px;
 }
 
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
 .brand-block {
   display: flex;
   align-items: center;
@@ -116,6 +122,54 @@ h3 {
 
 .status-line.disconnected {
   color: #b42318;
+}
+
+.login-panel {
+  display: grid;
+  min-height: min(560px, calc(100vh - 120px));
+  place-items: center;
+}
+
+.login-form {
+  display: grid;
+  width: min(420px, 100%);
+  gap: 14px;
+  padding: 22px;
+  border: 1px solid #d7dddf;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 18px 45px rgba(15, 23, 42, 0.08);
+}
+
+.login-form p {
+  margin: 6px 0 0;
+  color: #62696d;
+  font-size: 13px;
+}
+
+.login-form label {
+  display: grid;
+  gap: 6px;
+  color: #556066;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.login-form input {
+  width: 100%;
+  min-height: 42px;
+  border: 1px solid #cfd7db;
+  border-radius: 6px;
+  padding: 0 12px;
+  color: #17191a;
+  background: #ffffff;
+  font-size: 15px;
+}
+
+.login-message {
+  color: #b42318;
+  font-size: 13px;
+  font-weight: 700;
 }
 
 .icon-button {
@@ -429,7 +483,7 @@ h3 {
 
 .active-trade-grid {
   display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-columns: repeat(8, minmax(0, 1fr));
   gap: 8px;
 }
 
@@ -452,6 +506,18 @@ h3 {
 }
 
 .active-trade-grid strong.negative {
+  color: #b42318;
+}
+
+.position-row strong.negative {
+  color: #b42318;
+}
+
+td strong.positive {
+  color: #13795b;
+}
+
+td strong.negative {
   color: #b42318;
 }
 
@@ -930,9 +996,49 @@ tr:last-child td {
   display: grid;
 }
 
+.position-view-tabs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  padding: 12px 16px;
+  border-bottom: 1px solid #edf0f2;
+  background: #f8fafb;
+}
+
+.position-view-tabs button {
+  display: flex;
+  min-height: 42px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 0;
+  border-radius: 6px;
+  color: #526168;
+  background: transparent;
+  font-weight: 900;
+}
+
+.position-view-tabs button.active {
+  color: #102321;
+  background: #ffffff;
+  box-shadow: 0 1px 5px rgba(28, 35, 38, 0.12);
+}
+
+.position-view-tabs span {
+  display: inline-flex;
+  min-width: 24px;
+  height: 24px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  color: #53676d;
+  background: #e9eef1;
+  font-size: 12px;
+}
+
 .position-row {
   display: grid;
-  grid-template-columns: minmax(150px, 1.4fr) repeat(4, minmax(110px, 1fr)) minmax(220px, auto);
+  grid-template-columns: minmax(150px, 1.4fr) repeat(5, minmax(100px, 1fr)) minmax(220px, auto);
   gap: 12px;
   align-items: center;
   padding: 14px 16px;
@@ -959,6 +1065,69 @@ tr:last-child td {
   align-items: center;
   justify-content: flex-end;
   gap: 8px;
+}
+
+.closed-positions-panel {
+  padding-top: 0;
+}
+
+.panel-header.compact {
+  padding-top: 0;
+}
+
+.date-filter {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #667085;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.date-filter input {
+  min-height: 36px;
+  border: 1px solid #cfd7db;
+  border-radius: 6px;
+  padding: 0 10px;
+  color: #181a1b;
+  background: #ffffff;
+}
+
+.closed-total-inline {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 18px;
+}
+
+.closed-total-inline div {
+  min-width: 92px;
+}
+
+.closed-total-inline span {
+  display: block;
+  color: #667085;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.closed-total-inline strong {
+  display: block;
+  margin-top: 4px;
+  color: #181a1b;
+  font-size: 15px;
+  line-height: 1.2;
+}
+
+.closed-total-inline strong.positive {
+  color: #13795b;
+}
+
+.closed-total-inline strong.negative {
+  color: #b42318;
 }
 
 .audit-list {
@@ -1303,6 +1472,16 @@ tr:last-child td {
 
   .position-actions {
     justify-content: flex-start;
+  }
+
+  .panel-header.compact {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .closed-total-inline {
+    justify-content: flex-start;
+    flex-wrap: wrap;
   }
 
   .audit-row {

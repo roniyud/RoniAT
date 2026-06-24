@@ -4,9 +4,7 @@ using RoniAT.TradingEngine.Models;
 
 namespace RoniAT.TradingEngine.Services;
 
-public sealed class RiskValidator(
-    RiskSettingsStore settingsStore,
-    DailyPerformanceStore dailyPerformanceStore)
+public sealed class RiskValidator(RiskSettingsStore settingsStore)
 {
     public async Task<RiskValidationResult> ValidateEntrySignalAsync(TradingSignalRecord signal, TradingDbContext db)
     {
@@ -40,7 +38,7 @@ public sealed class RiskValidator(
         var projectedLoss = settings.TestMode
             ? 100m * signal.Contracts * GetPointValue(signal.Symbol)
             : Math.Abs(signal.EntryPrice - signal.StopLoss) * signal.Contracts * GetPointValue(signal.Symbol);
-        AddDailyLossReasons(settings, projectedLoss, reasons);
+        await AddDailyLossReasonsAsync(settings, projectedLoss, db, reasons);
 
         var allowedSymbols = settings.AllowedSymbols
             .Where(symbol => !string.IsNullOrWhiteSpace(symbol))
@@ -107,15 +105,19 @@ public sealed class RiskValidator(
         };
     }
 
-    private void AddDailyLossReasons(RiskSettings settings, decimal projectedLoss, List<string> reasons)
+    private static async Task AddDailyLossReasonsAsync(RiskSettings settings, decimal projectedLoss, TradingDbContext db, List<string> reasons)
     {
         if (settings.MaxDailyLoss <= 0)
         {
             return;
         }
 
-        var today = dailyPerformanceStore.GetToday();
-        var currentLoss = Math.Max(0m, -today.RealizedPnl);
+        var date = DateOnly.FromDateTime(DateTime.Now);
+        var closedPositions = await db.ClosedPositions.ToListAsync();
+        var realizedPnl = closedPositions
+            .Where(position => DateOnly.FromDateTime(position.ClosedAt.LocalDateTime) == date)
+            .Sum(position => position.RealizedPnl ?? 0m);
+        var currentLoss = Math.Max(0m, -realizedPnl);
         if (currentLoss >= settings.MaxDailyLoss)
         {
             reasons.Add($"Daily loss {currentLoss:0.##} reached max daily loss {settings.MaxDailyLoss:0.##}");

@@ -175,6 +175,7 @@ public sealed class IBKRBrokerAdapter(
             db.Orders.Add(order);
 
             PositionRecord? position = null;
+            var protectionStatus = "";
             if (submittedOrder.FilledQuantity > 0 && submittedOrder.AverageFillPrice > 0)
             {
                 db.Executions.Add(new ExecutionRecord
@@ -190,40 +191,77 @@ public sealed class IBKRBrokerAdapter(
 
                 position = await UpsertMarketPositionAsync(normalizedSymbol, normalizedDirection, contracts, submittedOrder.AverageFillPrice, db, now);
 
-                if (attachProtection && position is not null)
+                if (attachProtection && position is null)
+                {
+                    protectionStatus = " protection skipped: no open system position remains after this fill";
+                    db.AuditLogs.Add(AuditLogRecord.BrokerAction(
+                        "ibkr.protection_skipped",
+                        $"Protection skipped for {normalizedSymbol}: market order reduced or closed the existing system position"));
+                }
+                else if (attachProtection && position is not null && position.Direction != normalizedDirection)
+                {
+                    protectionStatus = " protection skipped: order reduced an existing opposite position";
+                    db.AuditLogs.Add(AuditLogRecord.BrokerAction(
+                        "ibkr.protection_skipped",
+                        $"Protection skipped for {normalizedSymbol}: market order reduced an existing {position.Direction} system position"));
+                }
+                else if (attachProtection && position is not null)
                 {
                     var distance = protectionDistance is > 0 ? protectionDistance.Value : 100m;
                     var (calculatedStopLoss, calculatedTakeProfit) = CalculateProtectionLevels(normalizedDirection, submittedOrder.AverageFillPrice, distance);
                     var effectiveStopLoss = stopLoss ?? calculatedStopLoss;
                     var effectiveTakeProfit = takeProfit ?? calculatedTakeProfit;
-                    var protectiveOrders = await connectionSession.PlaceProtectiveExitOrdersAsync(
-                        normalizedSymbol,
-                        normalizedDirection,
-                        contracts,
-                        effectiveStopLoss,
-                        effectiveTakeProfit);
-
-                    position.StopLoss = effectiveStopLoss;
-                    position.TakeProfit1 = effectiveTakeProfit;
-                    position.TakeProfit2 = null;
-                    position.UpdatedAt = now;
-
-                    foreach (var protectiveOrder in protectiveOrders)
+                    try
                     {
-                        var isStop = protectiveOrder.OrderId == protectiveOrders[0].OrderId;
-                        db.Orders.Add(new OrderRecord
+                        await CancelWorkingOrdersAsync(normalizedSymbol, db);
+                        var protectiveOrders = await connectionSession.PlaceProtectiveExitOrdersAsync(
+                            normalizedSymbol,
+                            position.Direction,
+                            position.Quantity,
+                            effectiveStopLoss,
+                            effectiveTakeProfit);
+
+                        position.StopLoss = effectiveStopLoss;
+                        position.TakeProfit1 = effectiveTakeProfit;
+                        position.TakeProfit2 = null;
+                        position.UpdatedAt = now;
+
+                        foreach (var protectiveOrder in protectiveOrders)
                         {
-                            BrokerOrderId = protectiveOrder.OrderId.ToString(),
-                            Symbol = normalizedSymbol,
-                            Direction = normalizedDirection == "LONG" ? "SHORT" : "LONG",
-                            OrderType = isStop ? "ibkr_stop_loss" : "ibkr_take_profit",
-                            Quantity = contracts,
-                            Price = isStop ? null : effectiveTakeProfit,
-                            StopPrice = isStop ? effectiveStopLoss : null,
-                            Status = MapOrderStatus(protectiveOrder.Status),
-                            CreatedAt = now,
-                            UpdatedAt = now
-                        });
+                            var isStop = protectiveOrder.OrderId == protectiveOrders[0].OrderId;
+                            db.Orders.Add(new OrderRecord
+                            {
+                                BrokerOrderId = protectiveOrder.OrderId.ToString(),
+                                Symbol = normalizedSymbol,
+                                Direction = position.Direction == "LONG" ? "SHORT" : "LONG",
+                                OrderType = isStop ? "ibkr_stop_loss" : "ibkr_take_profit",
+                                Quantity = position.Quantity,
+                                Price = isStop ? null : effectiveTakeProfit,
+                                StopPrice = isStop ? effectiveStopLoss : null,
+                                Status = MapOrderStatus(protectiveOrder.Status),
+                                CreatedAt = now,
+                                UpdatedAt = now
+                            });
+                        }
+
+                        protectionStatus = $" protected with SL={effectiveStopLoss} TP={effectiveTakeProfit}";
+                        db.AuditLogs.Add(AuditLogRecord.BrokerAction(
+                            "ibkr.protection_attached",
+                            $"Attached IBKR protection for {normalizedSymbol}: SL={effectiveStopLoss}, TP={effectiveTakeProfit}, qty={position.Quantity}"));
+                    }
+                    catch (Exception protectionError)
+                    {
+                        db.AuditLogs.Add(AuditLogRecord.BrokerAction(
+                            "ibkr.protection_failed",
+                            $"IBKR market order filled for {normalizedSymbol}, but TP/SL were not submitted: {protectionError.Message}"));
+
+                        var protectionFailedStatus = submittedOrder.FilledQuantity > 0 ? "protection_failed" : localStatus;
+                        return new MarketOrderResult(
+                            false,
+                            protectionFailedStatus,
+                            $"IBKR market order {submittedOrder.OrderId} filled, but TP/SL were not submitted: {protectionError.Message}",
+                            order,
+                            position);
                     }
                 }
             }
@@ -234,7 +272,7 @@ public sealed class IBKRBrokerAdapter(
 
             var ok = localStatus != "rejected" && localStatus != "cancelled";
             var status = submittedOrder.FilledQuantity > 0 ? "filled" : localStatus;
-            return new MarketOrderResult(ok, status, $"IBKR market order {submittedOrder.OrderId} {status}", order, position);
+            return new MarketOrderResult(ok, status, $"IBKR market order {submittedOrder.OrderId} {status}{protectionStatus}", order, position);
         }
         catch (Exception error)
         {
@@ -322,17 +360,33 @@ public sealed class IBKRBrokerAdapter(
     public async Task<BrokerActionResult> ClosePositionAsync(string symbol, TradingDbContext db)
     {
         var normalizedSymbol = symbol.Trim().ToUpperInvariant();
+        await connectionSession.SyncPositionsAsync();
+        db.ChangeTracker.Clear();
+
         var position = await db.Positions.SingleOrDefaultAsync(item => item.Symbol == normalizedSymbol);
         if (position is null)
         {
             db.AuditLogs.Add(AuditLogRecord.BrokerAction(
                 "ibkr.close_position_skipped",
-                $"No system-owned IBKR position found for {normalizedSymbol}"));
+                $"No system-owned IBKR position found for {normalizedSymbol} after broker sync"));
 
             return new BrokerActionResult(0, 0);
         }
 
         await CancelWorkingOrdersAsync(normalizedSymbol, db);
+        await db.SaveChangesAsync();
+        await connectionSession.SyncPositionsAsync();
+        db.ChangeTracker.Clear();
+
+        position = await db.Positions.SingleOrDefaultAsync(item => item.Symbol == normalizedSymbol);
+        if (position is null)
+        {
+            db.AuditLogs.Add(AuditLogRecord.BrokerAction(
+                "ibkr.close_position_skipped",
+                $"No system-owned IBKR position found for {normalizedSymbol} after cancelling working orders"));
+
+            return new BrokerActionResult(0, 0);
+        }
 
         var closeDirection = position.Direction == "LONG" ? "SHORT" : "LONG";
         var result = await PlaceMarketOrderAsync(
@@ -542,18 +596,25 @@ public sealed class IBKRBrokerAdapter(
         }
         else if (contracts < existing.Quantity)
         {
-            dailyPerformanceStore.AddRealizedPnl(CalculateRealizedPnl(existing, fillPrice, contracts));
+            var realizedPnl = CalculateRealizedPnl(existing, fillPrice, contracts);
+            dailyPerformanceStore.AddRealizedPnl(realizedPnl);
+            RecordClosedPosition(db, existing, contracts, fillPrice, now, "partial_close");
             existing.Quantity -= contracts;
         }
         else if (contracts == existing.Quantity)
         {
-            dailyPerformanceStore.AddRealizedPnl(CalculateRealizedPnl(existing, fillPrice, contracts));
+            var realizedPnl = CalculateRealizedPnl(existing, fillPrice, contracts);
+            dailyPerformanceStore.AddRealizedPnl(realizedPnl);
+            RecordClosedPosition(db, existing, contracts, fillPrice, now, "market_close");
             db.Positions.Remove(existing);
             return null;
         }
         else
         {
-            dailyPerformanceStore.AddRealizedPnl(CalculateRealizedPnl(existing, fillPrice, existing.Quantity));
+            var closedQuantity = existing.Quantity;
+            var realizedPnl = CalculateRealizedPnl(existing, fillPrice, closedQuantity);
+            dailyPerformanceStore.AddRealizedPnl(realizedPnl);
+            RecordClosedPosition(db, existing, closedQuantity, fillPrice, now, "reverse_close");
             existing.Quantity = contracts - existing.Quantity;
             existing.Direction = direction;
             existing.AveragePrice = fillPrice;
@@ -576,6 +637,25 @@ public sealed class IBKRBrokerAdapter(
     {
         var directionMultiplier = position.Direction == "LONG" ? 1m : -1m;
         return (exitPrice - position.AveragePrice) * directionMultiplier * closedQuantity * GetPointValue(position.Symbol);
+    }
+
+    private static void RecordClosedPosition(TradingDbContext db, PositionRecord position, int closedQuantity, decimal exitPrice, DateTimeOffset closedAt, string closeReason)
+    {
+        db.ClosedPositions.Add(new ClosedPositionRecord
+        {
+            Symbol = position.Symbol,
+            Direction = position.Direction,
+            Quantity = closedQuantity,
+            AveragePrice = position.AveragePrice,
+            ExitPrice = exitPrice,
+            StopLoss = position.StopLoss,
+            TakeProfit1 = position.TakeProfit1,
+            TakeProfit2 = position.TakeProfit2,
+            RealizedPnl = CalculateRealizedPnl(position, exitPrice, closedQuantity),
+            CloseReason = closeReason,
+            OpenedAt = position.OpenedAt,
+            ClosedAt = closedAt
+        });
     }
 
     private static decimal GetPointValue(string symbol)

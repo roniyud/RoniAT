@@ -7,6 +7,7 @@ public sealed record RiskSettingsUpdateRequest(
     [property: JsonPropertyName("max_loss_per_trade")] decimal MaxLossPerTrade,
     [property: JsonPropertyName("max_daily_loss")] decimal MaxDailyLoss,
     [property: JsonPropertyName("max_entry_price_deviation_points")] decimal MaxEntryPriceDeviationPoints,
+    [property: JsonPropertyName("chart_market_protection_distance_points")] decimal ChartMarketProtectionDistancePoints,
     [property: JsonPropertyName("allowed_symbols")] IReadOnlyList<string> AllowedSymbols,
     [property: JsonPropertyName("test_mode")] bool TestMode,
     [property: JsonPropertyName("ignore_tp2")] bool IgnoreTakeProfit2,
@@ -15,5 +16,9 @@ public sealed record RiskSettingsUpdateRequest(
     [property: JsonPropertyName("duplicate_window_seconds")] int DuplicateWindowSeconds,
     [property: JsonPropertyName("allow_position_stacking")] bool AllowPositionStacking,
     [property: JsonPropertyName("trading_locked")] bool TradingLocked,
-    [property: JsonPropertyName("emergency_stop_active")] bool EmergencyStopActive
+    [property: JsonPropertyName("emergency_stop_active")] bool EmergencyStopActive,
+    [property: JsonPropertyName("stop_loss_failsafe_enabled")] bool StopLossFailsafeEnabled,
+    [property: JsonPropertyName("stop_loss_failsafe_poll_seconds")] int StopLossFailsafePollSeconds,
+    [property: JsonPropertyName("stop_loss_failsafe_confirm_seconds")] int StopLossFailsafeConfirmSeconds,
+    [property: JsonPropertyName("stop_loss_failsafe_cooldown_seconds")] int StopLossFailsafeCooldownSeconds
 );
