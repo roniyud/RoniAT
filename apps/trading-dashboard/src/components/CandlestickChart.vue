@@ -52,6 +52,7 @@ const props = defineProps<{
   isSubmittingTrade: boolean
   isLoading: boolean
   levels: ChartPriceLevel[]
+  marketDataWarning: string
   requireTradeConfirmation: boolean
   symbol: string
   timeframe: Timeframe
@@ -167,6 +168,8 @@ function findDraggableLevelAtPrice(price: number) {
 }
 
 function handlePointerDown(event: MouseEvent) {
+  if (props.marketDataWarning) return
+
   const price = getPriceFromPointer(event)
   if (price == null) return
 
@@ -463,6 +466,9 @@ onUnmounted(() => {
 
     <div class="chart-body">
       <div ref="chartContainer" class="chart-surface" />
+      <div v-if="marketDataWarning" class="chart-warning">
+        {{ marketDataWarning }}
+      </div>
       <div v-if="isLoading" class="chart-overlay">Loading candles</div>
       <div v-else-if="errorMessage" class="chart-overlay error">{{ errorMessage }}</div>
       <div v-else-if="candles.length === 0" class="chart-overlay">No candles</div>

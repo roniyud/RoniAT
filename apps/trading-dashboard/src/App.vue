@@ -73,6 +73,7 @@ const selectedChartSymbol = ref('MNQ1!')
 const requireChartTradeConfirmation = ref(true)
 const chartCandles = ref<CandlestickData[]>([])
 const chartError = ref('')
+const chartMarketDataWarning = ref('')
 const isChartLoading = ref(false)
 const realtimeStatus = ref<RealtimeStatus>('disconnected')
 const lastRealtimeEvent = ref<TradingUpdate | null>(null)
@@ -219,6 +220,7 @@ const chartTradeBlockedReason = computed(() => {
   if (!brokerStatus.value?.enabled) return 'Broker is disabled'
   if (!brokerStatus.value?.connected) return 'Broker is disconnected'
   if (brokerStatus.value?.read_only) return 'RoniAT order lock is on'
+  if (chartMarketDataWarning.value) return 'Chart is using simulated fallback data; chart trading is disabled'
   if (!isChartSymbolAllowed.value) return `${chartSymbol.value} is not in allowed symbols`
   if (latestChartPrice.value == null) return 'Waiting for chart price'
   return ''
@@ -290,11 +292,17 @@ async function refreshCandles(showLoading = true) {
     isChartLoading.value = true
   }
   chartError.value = ''
+  chartMarketDataWarning.value = ''
 
   try {
-    chartCandles.value = await getCandles(chartSymbol.value, selectedTimeframe.value)
+    const result = await getCandles(chartSymbol.value, selectedTimeframe.value)
+    chartCandles.value = result.candles
+    chartMarketDataWarning.value = result.source === 'fallback'
+      ? `Simulated fallback candles. IBKR market data failed: ${result.warning || 'historical data unavailable'}`
+      : ''
   } catch (error) {
     chartCandles.value = []
+    chartMarketDataWarning.value = ''
     chartError.value = error instanceof Error ? error.message : 'Market data unavailable'
   } finally {
     isChartRefreshInFlight = false
@@ -932,6 +940,7 @@ watch(activeTab, (tab) => {
         :chart-trade-settings="manualTrade"
         :chart-working-order-count="chartWorkingOrderCount"
         :error-message="chartError"
+        :market-data-warning="chartMarketDataWarning"
         :is-submitting-trade="isSubmittingTrade"
         :is-loading="isChartLoading"
         :levels="chartLevels"

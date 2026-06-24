@@ -17,7 +17,7 @@ public sealed class MockMarketDataProvider : IMarketDataProvider
         return Task.FromResult(GetCandles(symbol, timeframe));
     }
 
-    public IReadOnlyList<CandleResponse> GetCandles(string symbol, string timeframe)
+    public IReadOnlyList<CandleResponse> GetCandles(string symbol, string timeframe, decimal? anchorPrice = null)
     {
         var normalizedSymbol = string.IsNullOrWhiteSpace(symbol) ? "MNQ1!" : symbol.Trim().ToUpperInvariant();
         var normalizedTimeframe = string.IsNullOrWhiteSpace(timeframe) ? "5m" : timeframe.Trim().ToLowerInvariant();
@@ -32,9 +32,9 @@ public sealed class MockMarketDataProvider : IMarketDataProvider
         var nowSeconds = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
         var alignedEnd = nowSeconds - (nowSeconds % intervalSeconds);
         var seed = GetSymbolSeed(normalizedSymbol) + intervalMinutes * 17;
-        var basePrice = normalizedSymbol.Contains("MNQ", StringComparison.OrdinalIgnoreCase)
+        var basePrice = anchorPrice ?? (normalizedSymbol.Contains("MNQ", StringComparison.OrdinalIgnoreCase)
             ? 30740m
-            : 100m + seed % 80;
+            : 100m + seed % 80);
 
         var close = basePrice;
         var candles = new List<CandleResponse>(candleCount);
@@ -42,6 +42,27 @@ public sealed class MockMarketDataProvider : IMarketDataProvider
         for (var index = candleCount - 1; index >= 0; index--)
         {
             var time = alignedEnd - index * intervalSeconds;
+            if (anchorPrice is not null)
+            {
+                var phase = (candleCount - index + seed) / 11d;
+                var previousPhase = phase - 0.35d;
+                var openOffset = Math.Sin(previousPhase) * 82 + Math.Cos(previousPhase / 2d) * 24;
+                var closeOffset = Math.Sin(phase) * 82 + Math.Cos(phase / 2d) * 24;
+                var anchoredOpen = anchorPrice.Value + (decimal)openOffset;
+                close = anchorPrice.Value + (decimal)closeOffset;
+                var anchoredWick = 9m + Math.Abs((decimal)PseudoRandom(seed * 3 + index) * 8m);
+                var anchoredHigh = Math.Max(anchoredOpen, close) + anchoredWick;
+                var anchoredLow = Math.Min(anchoredOpen, close) - anchoredWick;
+
+                candles.Add(new CandleResponse(
+                    time,
+                    RoundPrice(anchoredOpen),
+                    RoundPrice(anchoredHigh),
+                    RoundPrice(anchoredLow),
+                    RoundPrice(close)));
+                continue;
+            }
+
             var wave = Math.Sin((candleCount - index + seed) / 9d) * 8;
             var drift = Math.Cos((candleCount - index + seed) / 17d) * 3;
             var move = (decimal)(wave * 0.14 + drift * 0.18 + PseudoRandom(seed + index) * 2.6);

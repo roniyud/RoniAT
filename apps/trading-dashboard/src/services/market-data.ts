@@ -6,6 +6,12 @@ export type Timeframe = '1m' | '5m' | '15m' | '1h'
 
 export const timeframes: Timeframe[] = ['1m', '5m', '15m', '1h']
 
+export type MarketDataResult = {
+  candles: CandlestickData[]
+  source: 'ibkr' | 'fallback' | 'unknown'
+  warning: string
+}
+
 type CandleResponse = {
   time: number
   open: number
@@ -14,7 +20,7 @@ type CandleResponse = {
   close: number
 }
 
-export async function getCandles(symbol: string, timeframe: Timeframe): Promise<CandlestickData[]> {
+export async function getCandles(symbol: string, timeframe: Timeframe): Promise<MarketDataResult> {
   const params = new URLSearchParams({
     symbol,
     timeframe,
@@ -31,13 +37,25 @@ export async function getCandles(symbol: string, timeframe: Timeframe): Promise<
 
   const candles = await response.json() as CandleResponse[]
 
-  return candles.map((candle) => ({
-    time: candle.time as Time,
-    open: candle.open,
-    high: candle.high,
-    low: candle.low,
-    close: candle.close,
-  }))
+  const source = normalizeMarketDataSource(response.headers.get('X-Market-Data-Source'))
+  const warning = response.headers.get('X-Market-Data-Warning') ?? ''
+
+  return {
+    candles: candles.map((candle) => ({
+      time: candle.time as Time,
+      open: candle.open,
+      high: candle.high,
+      low: candle.low,
+      close: candle.close,
+    })),
+    source,
+    warning,
+  }
+}
+
+function normalizeMarketDataSource(value: string | null): MarketDataResult['source'] {
+  if (value === 'ibkr' || value === 'fallback') return value
+  return 'unknown'
 }
 
 async function readMarketDataError(response: Response) {

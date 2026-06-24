@@ -634,6 +634,23 @@ h3 {
   color: #9f1d1d;
 }
 
+.chart-warning {
+  position: absolute;
+  top: 10px;
+  left: 12px;
+  right: 12px;
+  z-index: 2;
+  border: 1px solid #fedf89;
+  border-radius: 8px;
+  padding: 8px 10px;
+  color: #7a2e0e;
+  background: rgba(255, 250, 235, 0.94);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.35;
+  pointer-events: none;
+}
+
 .chart-footer {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));

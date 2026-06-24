@@ -21,6 +21,7 @@ builder.Services.AddCors(options =>
                 "http://127.0.0.1:5173",
                 "http://localhost:4173",
                 "http://127.0.0.1:4173")
+            .WithExposedHeaders("X-Market-Data-Source", "X-Market-Data-Warning")
             .AllowAnyHeader()
             .AllowAnyMethod()
             .AllowCredentials();
@@ -200,11 +201,22 @@ app.MapGet("/api/audit-logs", async (TradingDbContext db) =>
 .WithName("GetAuditLogs")
 .WithOpenApi();
 
-app.MapGet("/api/market-data/candles", async (string? symbol, string? timeframe, IMarketDataProvider marketDataProvider, CancellationToken cancellationToken) =>
+app.MapGet("/api/market-data/candles", async (
+    string? symbol,
+    string? timeframe,
+    HttpContext httpContext,
+    TradingDbContext db,
+    IMarketDataProvider marketDataProvider,
+    MockMarketDataProvider fallbackProvider,
+    CancellationToken cancellationToken) =>
 {
+    var normalizedSymbol = string.IsNullOrWhiteSpace(symbol) ? "MNQ1!" : symbol.Trim().ToUpperInvariant();
+    var normalizedTimeframe = string.IsNullOrWhiteSpace(timeframe) ? "5m" : timeframe.Trim().ToLowerInvariant();
+
     try
     {
-        var candles = await marketDataProvider.GetCandlesAsync(symbol ?? "MNQ1!", timeframe ?? "5m", cancellationToken);
+        var candles = await marketDataProvider.GetCandlesAsync(normalizedSymbol, normalizedTimeframe, cancellationToken);
+        httpContext.Response.Headers["X-Market-Data-Source"] = "ibkr";
         return Results.Ok(candles);
     }
     catch (ArgumentException error)
@@ -213,10 +225,16 @@ app.MapGet("/api/market-data/candles", async (string? symbol, string? timeframe,
     }
     catch (InvalidOperationException error)
     {
-        return Results.Problem(
-            title: "Market data unavailable",
-            detail: error.Message,
-            statusCode: StatusCodes.Status503ServiceUnavailable);
+        var anchorPrice = await db.Positions
+            .Where(position => position.Symbol == normalizedSymbol)
+            .Select(position => (decimal?)position.AveragePrice)
+            .SingleOrDefaultAsync(cancellationToken);
+
+        var fallbackCandles = fallbackProvider.GetCandles(normalizedSymbol, normalizedTimeframe, anchorPrice);
+        httpContext.Response.Headers["X-Market-Data-Source"] = "fallback";
+        httpContext.Response.Headers["X-Market-Data-Warning"] = error.Message;
+
+        return Results.Ok(fallbackCandles);
     }
 })
 .WithName("GetCandles")
