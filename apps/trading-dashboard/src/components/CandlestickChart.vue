@@ -72,6 +72,7 @@ let chart: IChartApi | null = null
 let candleSeries: ISeriesApi<'Candlestick'> | null = null
 let priceLines: IPriceLine[] = []
 let resizeObserver: ResizeObserver | null = null
+let hasFitInitialData = false
 
 const latestCandle = computed(() => props.candles.at(-1))
 const formattedSymbol = computed(() => props.symbol.trim().toUpperCase())
@@ -180,7 +181,7 @@ function renderChart() {
   candleSeries = series
   series.setData(props.candles)
   syncPriceLines()
-  chart.timeScale().fitContent()
+  fitInitialData()
 
   resizeObserver = new ResizeObserver(() => {
     chart?.applyOptions({ autoSize: true })
@@ -188,11 +189,24 @@ function renderChart() {
   resizeObserver.observe(chartContainer.value)
 }
 
+function fitInitialData() {
+  if (!chart || props.candles.length === 0 || hasFitInitialData) return
+  chart.timeScale().fitContent()
+  hasFitInitialData = true
+}
+
 watch(
   () => props.candles,
   (candles) => {
     candleSeries?.setData(candles)
-    chart?.timeScale().fitContent()
+    fitInitialData()
+  },
+)
+
+watch(
+  () => [props.symbol, props.timeframe],
+  () => {
+    hasFitInitialData = false
   },
 )
 
