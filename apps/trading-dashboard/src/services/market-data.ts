@@ -9,7 +9,7 @@ export const timeframes: Timeframe[] = ['1m', '5m', '15m', '1h']
 
 export type MarketDataResult = {
   candles: CandlestickData[]
-  source: 'ibkr' | 'fallback' | 'unknown'
+  source: 'ibkr' | 'tastytrade' | 'fallback' | 'unknown'
   warning: string
 }
 
@@ -106,7 +106,7 @@ function authHeaders(): Record<string, string> {
 }
 
 function normalizeMarketDataSource(value: string | null): MarketDataResult['source'] {
-  if (value === 'ibkr' || value === 'fallback') return value
+  if (value === 'ibkr' || value === 'tastytrade' || value === 'fallback') return value
   return 'unknown'
 }
 

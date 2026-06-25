@@ -36,17 +36,56 @@ public sealed class BrokerSettingsStore
             : settings.IbkrPaper;
     }
 
-    public BrokerSettingsUpdateResult Update(BrokerSettings next)
+    public TastytradeSettings GetActiveTastytradeSettings()
     {
-        var normalized = Normalize(next);
-        var errors = Validate(normalized);
-        if (errors.Count > 0)
-        {
-            return new BrokerSettingsUpdateResult(false, Get(), errors);
-        }
+        var settings = Get();
+        return settings.TastytradeEnvironment.Equals("Live", StringComparison.OrdinalIgnoreCase)
+            ? settings.TastytradeLive
+            : settings.TastytradeSandbox;
+    }
 
+    public TastytradeSettings GetTastytradeSettings(string environment)
+    {
+        var settings = Get();
+        return environment.Equals("Live", StringComparison.OrdinalIgnoreCase)
+            ? settings.TastytradeLive
+            : settings.TastytradeSandbox;
+    }
+
+    public BrokerSettingsUpdateResult UpdateTastytradeTokens(string environment, string accessToken, string? refreshToken, DateTimeOffset? accessTokenExpiresAt)
+    {
         lock (syncRoot)
         {
+            var next = Clone(current);
+            var target = environment.Equals("Live", StringComparison.OrdinalIgnoreCase)
+                ? next.TastytradeLive
+                : next.TastytradeSandbox;
+
+            target.AccessToken = accessToken.Trim();
+            if (!string.IsNullOrWhiteSpace(refreshToken))
+            {
+                target.RefreshToken = refreshToken.Trim();
+            }
+
+            target.AccessTokenExpiresAt = accessTokenExpiresAt;
+            current = Normalize(next);
+            Directory.CreateDirectory(Path.GetDirectoryName(filePath)!);
+            File.WriteAllText(filePath, JsonSerializer.Serialize(current, JsonOptions));
+            return new BrokerSettingsUpdateResult(true, Clone(current), []);
+        }
+    }
+
+    public BrokerSettingsUpdateResult Update(BrokerSettings next)
+    {
+        lock (syncRoot)
+        {
+            var normalized = Normalize(PreserveRuntimeSecrets(next, current));
+            var errors = Validate(normalized);
+            if (errors.Count > 0)
+            {
+                return new BrokerSettingsUpdateResult(false, Clone(current), errors);
+            }
+
             current = normalized;
             Directory.CreateDirectory(Path.GetDirectoryName(filePath)!);
             File.WriteAllText(filePath, JsonSerializer.Serialize(current, JsonOptions));
@@ -80,10 +119,13 @@ public sealed class BrokerSettingsStore
     {
         return new BrokerSettings
         {
-            Mode = NormalizeOption(settings.Mode, "Paper", ["Paper", "IBKR"]),
+            Mode = NormalizeOption(settings.Mode, "Paper", ["Paper", "IBKR", "Tastytrade"]),
             IbkrEnvironment = NormalizeOption(settings.IbkrEnvironment, "Paper", ["Paper", "Live"]),
+            TastytradeEnvironment = NormalizeOption(settings.TastytradeEnvironment, "Sandbox", ["Sandbox", "Live"]),
             IbkrPaper = NormalizeIBKR(settings.IbkrPaper, paperDefaults: true),
-            IbkrLive = NormalizeIBKR(settings.IbkrLive, paperDefaults: false)
+            IbkrLive = NormalizeIBKR(settings.IbkrLive, paperDefaults: false),
+            TastytradeSandbox = NormalizeTastytrade(settings.TastytradeSandbox, sandboxDefaults: true),
+            TastytradeLive = NormalizeTastytrade(settings.TastytradeLive, sandboxDefaults: false)
         };
     }
 
@@ -95,6 +137,40 @@ public sealed class BrokerSettingsStore
             Port = settings.Port > 0 ? settings.Port : paperDefaults ? 4002 : 4001,
             ClientId = settings.ClientId > 0 ? settings.ClientId : paperDefaults ? 10 : 11,
             Account = settings.Account?.Trim() ?? "",
+            Enabled = settings.Enabled,
+            ReadOnly = settings.ReadOnly
+        };
+    }
+
+    private static TastytradeSettings NormalizeTastytrade(TastytradeSettings settings, bool sandboxDefaults)
+    {
+        var apiBaseUrl = string.IsNullOrWhiteSpace(settings.ApiBaseUrl)
+            ? sandboxDefaults ? "https://api.cert.tastyworks.com" : "https://api.tastyworks.com"
+            : settings.ApiBaseUrl.Trim().TrimEnd('/');
+
+        return new TastytradeSettings
+        {
+            ApiBaseUrl = apiBaseUrl,
+            StreamerBaseUrl = string.IsNullOrWhiteSpace(settings.StreamerBaseUrl)
+                ? sandboxDefaults ? "wss://streamer.cert.tastyworks.com" : "wss://streamer.tastyworks.com"
+                : settings.StreamerBaseUrl.Trim().TrimEnd('/'),
+            AuthorizationUrl = string.IsNullOrWhiteSpace(settings.AuthorizationUrl)
+                ? $"{apiBaseUrl}/oauth/authorize"
+                : settings.AuthorizationUrl.Trim(),
+            TokenUrl = string.IsNullOrWhiteSpace(settings.TokenUrl)
+                ? $"{apiBaseUrl}/oauth/token"
+                : settings.TokenUrl.Trim(),
+            ClientId = settings.ClientId?.Trim() ?? "",
+            ClientSecret = settings.ClientSecret ?? "",
+            RedirectUri = string.IsNullOrWhiteSpace(settings.RedirectUri)
+                ? "http://localhost:3001/api/tastytrade/oauth/callback"
+                : settings.RedirectUri.Trim(),
+            Username = settings.Username?.Trim() ?? "",
+            Password = settings.Password ?? "",
+            AccessToken = settings.AccessToken?.Trim() ?? "",
+            RefreshToken = settings.RefreshToken?.Trim() ?? "",
+            AccessTokenExpiresAt = settings.AccessTokenExpiresAt,
+            AccountNumber = settings.AccountNumber?.Trim() ?? "",
             Enabled = settings.Enabled,
             ReadOnly = settings.ReadOnly
         };
@@ -112,6 +188,8 @@ public sealed class BrokerSettingsStore
 
         ValidateIBKR(settings.IbkrPaper, "ibkr_paper", errors);
         ValidateIBKR(settings.IbkrLive, "ibkr_live", errors);
+        ValidateTastytrade(settings.TastytradeSandbox, "tastytrade_sandbox", errors);
+        ValidateTastytrade(settings.TastytradeLive, "tastytrade_live", errors);
 
         return errors;
     }
@@ -134,15 +212,96 @@ public sealed class BrokerSettingsStore
         }
     }
 
+    private static void ValidateTastytrade(TastytradeSettings settings, string prefix, List<string> errors)
+    {
+        if (!Uri.TryCreate(settings.ApiBaseUrl, UriKind.Absolute, out var apiUri)
+            || apiUri.Scheme is not ("http" or "https"))
+        {
+            errors.Add($"{prefix}.api_base_url must be a valid http/https URL");
+        }
+
+        if (!Uri.TryCreate(settings.StreamerBaseUrl, UriKind.Absolute, out var streamerUri)
+            || streamerUri.Scheme is not ("ws" or "wss"))
+        {
+            errors.Add($"{prefix}.streamer_base_url must be a valid ws/wss URL");
+        }
+
+        if (!Uri.TryCreate(settings.AuthorizationUrl, UriKind.Absolute, out var authorizationUri)
+            || authorizationUri.Scheme is not ("http" or "https"))
+        {
+            errors.Add($"{prefix}.authorization_url must be a valid http/https URL");
+        }
+
+        if (!Uri.TryCreate(settings.TokenUrl, UriKind.Absolute, out var tokenUri)
+            || tokenUri.Scheme is not ("http" or "https"))
+        {
+            errors.Add($"{prefix}.token_url must be a valid http/https URL");
+        }
+
+        if (!Uri.TryCreate(settings.RedirectUri, UriKind.Absolute, out var redirectUri)
+            || redirectUri.Scheme is not ("http" or "https"))
+        {
+            errors.Add($"{prefix}.redirect_uri must be a valid http/https URL");
+        }
+
+        if (!settings.Enabled)
+        {
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(settings.AccessToken))
+        {
+            if (string.IsNullOrWhiteSpace(settings.ClientId) || string.IsNullOrWhiteSpace(settings.ClientSecret))
+            {
+                errors.Add($"{prefix}.access_token or OAuth client credentials are required when enabled");
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(settings.AccountNumber))
+        {
+            errors.Add($"{prefix}.account_number is required when enabled");
+        }
+    }
+
     private static BrokerSettings Clone(BrokerSettings settings)
     {
         return new BrokerSettings
         {
             Mode = settings.Mode,
             IbkrEnvironment = settings.IbkrEnvironment,
+            TastytradeEnvironment = settings.TastytradeEnvironment,
             IbkrPaper = CloneIBKR(settings.IbkrPaper),
-            IbkrLive = CloneIBKR(settings.IbkrLive)
+            IbkrLive = CloneIBKR(settings.IbkrLive),
+            TastytradeSandbox = CloneTastytrade(settings.TastytradeSandbox),
+            TastytradeLive = CloneTastytrade(settings.TastytradeLive)
         };
+    }
+
+    private static BrokerSettings PreserveRuntimeSecrets(BrokerSettings next, BrokerSettings existing)
+    {
+        var merged = Clone(next);
+        PreserveTastytradeRuntimeSecrets(merged.TastytradeSandbox, existing.TastytradeSandbox);
+        PreserveTastytradeRuntimeSecrets(merged.TastytradeLive, existing.TastytradeLive);
+        return merged;
+    }
+
+    private static void PreserveTastytradeRuntimeSecrets(TastytradeSettings next, TastytradeSettings existing)
+    {
+        if (string.IsNullOrWhiteSpace(next.ClientSecret) && !string.IsNullOrWhiteSpace(existing.ClientSecret))
+        {
+            next.ClientSecret = existing.ClientSecret;
+        }
+
+        if (string.IsNullOrWhiteSpace(next.AccessToken) && !string.IsNullOrWhiteSpace(existing.AccessToken))
+        {
+            next.AccessToken = existing.AccessToken;
+            next.AccessTokenExpiresAt = existing.AccessTokenExpiresAt;
+        }
+
+        if (string.IsNullOrWhiteSpace(next.RefreshToken) && !string.IsNullOrWhiteSpace(existing.RefreshToken))
+        {
+            next.RefreshToken = existing.RefreshToken;
+        }
     }
 
     private static IBKRSettings CloneIBKR(IBKRSettings settings)
@@ -153,6 +312,28 @@ public sealed class BrokerSettingsStore
             Port = settings.Port,
             ClientId = settings.ClientId,
             Account = settings.Account,
+            Enabled = settings.Enabled,
+            ReadOnly = settings.ReadOnly
+        };
+    }
+
+    private static TastytradeSettings CloneTastytrade(TastytradeSettings settings)
+    {
+        return new TastytradeSettings
+        {
+            ApiBaseUrl = settings.ApiBaseUrl,
+            StreamerBaseUrl = settings.StreamerBaseUrl,
+            AuthorizationUrl = settings.AuthorizationUrl,
+            TokenUrl = settings.TokenUrl,
+            ClientId = settings.ClientId,
+            ClientSecret = settings.ClientSecret,
+            RedirectUri = settings.RedirectUri,
+            Username = settings.Username,
+            Password = settings.Password,
+            AccessToken = settings.AccessToken,
+            RefreshToken = settings.RefreshToken,
+            AccessTokenExpiresAt = settings.AccessTokenExpiresAt,
+            AccountNumber = settings.AccountNumber,
             Enabled = settings.Enabled,
             ReadOnly = settings.ReadOnly
         };

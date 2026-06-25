@@ -70,6 +70,10 @@ builder.Services.AddSingleton<RiskSettingsStore>();
 builder.Services.AddSingleton<DashboardAuthService>();
 builder.Services.AddSingleton<DailyPerformanceStore>();
 builder.Services.AddScoped<RiskValidator>();
+builder.Services.AddHttpClient("tastytrade", client =>
+{
+    client.Timeout = TimeSpan.FromSeconds(10);
+});
 builder.Services.Configure<BrokerSettings>(options =>
 {
     options.Mode = builder.Configuration.GetValue<string>("Broker:Mode") ?? "Paper";
@@ -93,19 +97,73 @@ builder.Services.Configure<BrokerSettings>(options =>
         Enabled = ibkrSection.GetValue<bool?>("Live:Enabled") ?? false,
         ReadOnly = ibkrSection.GetValue<bool?>("Live:ReadOnly") ?? true
     };
+
+    var tastytradeSection = builder.Configuration.GetSection("Tastytrade");
+    options.TastytradeSandbox = new TastytradeSettings
+    {
+        ApiBaseUrl = tastytradeSection.GetValue<string>("Sandbox:ApiBaseUrl") ?? "https://api.cert.tastyworks.com",
+        StreamerBaseUrl = tastytradeSection.GetValue<string>("Sandbox:StreamerBaseUrl") ?? "wss://streamer.cert.tastyworks.com",
+        AuthorizationUrl = tastytradeSection.GetValue<string>("Sandbox:AuthorizationUrl") ?? "https://api.cert.tastyworks.com/oauth/authorize",
+        TokenUrl = tastytradeSection.GetValue<string>("Sandbox:TokenUrl") ?? "https://api.cert.tastyworks.com/oauth/token",
+        ClientId = tastytradeSection.GetValue<string>("Sandbox:ClientId") ?? "",
+        ClientSecret = tastytradeSection.GetValue<string>("Sandbox:ClientSecret") ?? "",
+        RedirectUri = tastytradeSection.GetValue<string>("Sandbox:RedirectUri") ?? "http://localhost:3001/api/tastytrade/oauth/callback",
+        Username = tastytradeSection.GetValue<string>("Sandbox:Username") ?? "",
+        Password = tastytradeSection.GetValue<string>("Sandbox:Password") ?? "",
+        AccessToken = tastytradeSection.GetValue<string>("Sandbox:AccessToken") ?? "",
+        RefreshToken = tastytradeSection.GetValue<string>("Sandbox:RefreshToken") ?? "",
+        AccessTokenExpiresAt = tastytradeSection.GetValue<DateTimeOffset?>("Sandbox:AccessTokenExpiresAt"),
+        AccountNumber = tastytradeSection.GetValue<string>("Sandbox:AccountNumber") ?? "",
+        Enabled = tastytradeSection.GetValue<bool?>("Sandbox:Enabled") ?? false,
+        ReadOnly = tastytradeSection.GetValue<bool?>("Sandbox:ReadOnly") ?? true
+    };
+    options.TastytradeLive = new TastytradeSettings
+    {
+        ApiBaseUrl = tastytradeSection.GetValue<string>("Live:ApiBaseUrl") ?? "https://api.tastyworks.com",
+        StreamerBaseUrl = tastytradeSection.GetValue<string>("Live:StreamerBaseUrl") ?? "wss://streamer.tastyworks.com",
+        AuthorizationUrl = tastytradeSection.GetValue<string>("Live:AuthorizationUrl") ?? "https://api.tastyworks.com/oauth/authorize",
+        TokenUrl = tastytradeSection.GetValue<string>("Live:TokenUrl") ?? "https://api.tastyworks.com/oauth/token",
+        ClientId = tastytradeSection.GetValue<string>("Live:ClientId") ?? "",
+        ClientSecret = tastytradeSection.GetValue<string>("Live:ClientSecret") ?? "",
+        RedirectUri = tastytradeSection.GetValue<string>("Live:RedirectUri") ?? "http://localhost:3001/api/tastytrade/oauth/callback",
+        Username = tastytradeSection.GetValue<string>("Live:Username") ?? "",
+        Password = tastytradeSection.GetValue<string>("Live:Password") ?? "",
+        AccessToken = tastytradeSection.GetValue<string>("Live:AccessToken") ?? "",
+        RefreshToken = tastytradeSection.GetValue<string>("Live:RefreshToken") ?? "",
+        AccessTokenExpiresAt = tastytradeSection.GetValue<DateTimeOffset?>("Live:AccessTokenExpiresAt"),
+        AccountNumber = tastytradeSection.GetValue<string>("Live:AccountNumber") ?? "",
+        Enabled = tastytradeSection.GetValue<bool?>("Live:Enabled") ?? false,
+        ReadOnly = tastytradeSection.GetValue<bool?>("Live:ReadOnly") ?? true
+    };
 });
 builder.Services.AddSingleton<BrokerSettingsStore>();
 builder.Services.AddSingleton<BrokerConnectionStateStore>();
 builder.Services.AddSingleton<IBKRConnectionSession>();
 builder.Services.AddHostedService(serviceProvider => serviceProvider.GetRequiredService<IBKRConnectionSession>());
 builder.Services.AddHostedService<StopLossFailsafeService>();
+builder.Services.AddHostedService<TastytradeTokenRefreshService>();
 builder.Services.AddScoped<IBKRConnectionTester>();
+builder.Services.AddScoped<TastytradeConnectionTester>();
+builder.Services.AddSingleton<TastytradeOAuthStateStore>();
+builder.Services.AddSingleton<TastytradeOAuthService>();
+builder.Services.AddScoped<TastytradeAccountClient>();
+builder.Services.AddScoped<TastytradeOrderClient>();
+builder.Services.AddSingleton<TastytradeQuoteTokenClient>();
+builder.Services.AddSingleton<TastytradeInstrumentClient>();
+builder.Services.AddSingleton<TastytradeRealtimeMarketDataService>();
+builder.Services.AddHostedService(serviceProvider => serviceProvider.GetRequiredService<TastytradeRealtimeMarketDataService>());
+builder.Services.AddSingleton<TastytradePendingProtectionService>();
+builder.Services.AddHostedService(serviceProvider => serviceProvider.GetRequiredService<TastytradePendingProtectionService>());
 builder.Services.AddScoped<PaperBrokerAdapter>();
 builder.Services.AddScoped<IBKRBrokerAdapter>();
+builder.Services.AddScoped<TastytradeBrokerAdapter>();
 builder.Services.AddScoped<BrokerRouterAdapter>();
 builder.Services.AddScoped<IBrokerAdapter>(serviceProvider => serviceProvider.GetRequiredService<BrokerRouterAdapter>());
 builder.Services.AddSingleton<MockMarketDataProvider>();
-builder.Services.AddSingleton<IMarketDataProvider, IBKRMarketDataProvider>();
+builder.Services.AddSingleton<IBKRMarketDataProvider>();
+builder.Services.AddSingleton<TastytradeMarketDataProvider>();
+builder.Services.AddSingleton<MarketDataRouterProvider>();
+builder.Services.AddSingleton<IMarketDataProvider>(serviceProvider => serviceProvider.GetRequiredService<MarketDataRouterProvider>());
 
 var app = builder.Build();
 var dashboardDistPath = Path.GetFullPath(Path.Combine(
@@ -152,8 +210,9 @@ app.Use(async (context, next) =>
     var path = context.Request.Path;
     var requiresAuth = path.StartsWithSegments("/api") || path.StartsWithSegments("/hubs/trading");
     var isAuthEndpoint = path.StartsWithSegments("/api/auth");
+    var isTastytradeOAuthCallback = path.StartsWithSegments("/api/tastytrade/oauth/callback");
 
-    if (!requiresAuth || isAuthEndpoint)
+    if (!requiresAuth || isAuthEndpoint || isTastytradeOAuthCallback)
     {
         await next();
         return;
@@ -233,8 +292,20 @@ app.MapGet("/api/signals/{id:long}", async (long id, TradingDbContext db) =>
 .WithName("GetSignal")
 .WithOpenApi();
 
-app.MapGet("/api/orders", async (TradingDbContext db) =>
+app.MapGet("/api/orders", async (TradingDbContext db, BrokerSettingsStore brokerSettingsStore, TastytradeAccountClient tastytradeClient, CancellationToken cancellationToken) =>
 {
+    if (brokerSettingsStore.Get().Mode.Equals("Tastytrade", StringComparison.OrdinalIgnoreCase))
+    {
+        try
+        {
+            return Results.Ok(await tastytradeClient.GetLiveOrdersAsync(cancellationToken));
+        }
+        catch (InvalidOperationException error)
+        {
+            return Results.BadRequest(new ValidationErrorResponse([error.Message]));
+        }
+    }
+
     var orders = await db.Orders
         .OrderByDescending(order => order.Id)
         .Take(100)
@@ -257,8 +328,20 @@ app.MapGet("/api/executions", async (TradingDbContext db) =>
 .WithName("GetExecutions")
 .WithOpenApi();
 
-app.MapGet("/api/positions", async (TradingDbContext db) =>
+app.MapGet("/api/positions", async (TradingDbContext db, BrokerSettingsStore brokerSettingsStore, TastytradeAccountClient tastytradeClient, CancellationToken cancellationToken) =>
 {
+    if (brokerSettingsStore.Get().Mode.Equals("Tastytrade", StringComparison.OrdinalIgnoreCase))
+    {
+        try
+        {
+            return Results.Ok(await tastytradeClient.GetPositionsAsync(cancellationToken));
+        }
+        catch (InvalidOperationException error)
+        {
+            return Results.BadRequest(new ValidationErrorResponse([error.Message]));
+        }
+    }
+
     var positions = await db.Positions
         .OrderBy(position => position.Symbol)
         .ToListAsync();
@@ -315,6 +398,7 @@ app.MapGet("/api/market-data/candles", async (
     HttpContext httpContext,
     TradingDbContext db,
     IMarketDataProvider marketDataProvider,
+    MarketDataRouterProvider marketDataRouterProvider,
     MockMarketDataProvider fallbackProvider,
     CancellationToken cancellationToken) =>
 {
@@ -326,7 +410,7 @@ app.MapGet("/api/market-data/candles", async (
         using var marketDataTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         marketDataTimeout.CancelAfter(TimeSpan.FromSeconds(8));
         var candles = await marketDataProvider.GetCandlesAsync(normalizedSymbol, normalizedTimeframe, marketDataTimeout.Token);
-        httpContext.Response.Headers["X-Market-Data-Source"] = "ibkr";
+        httpContext.Response.Headers["X-Market-Data-Source"] = marketDataRouterProvider.ActiveSource;
         return Results.Ok(candles);
     }
     catch (ArgumentException error)
@@ -343,7 +427,7 @@ app.MapGet("/api/market-data/candles", async (
         var fallbackCandles = fallbackProvider.GetCandles(normalizedSymbol, normalizedTimeframe, anchorPrice);
         httpContext.Response.Headers["X-Market-Data-Source"] = "fallback";
         httpContext.Response.Headers["X-Market-Data-Warning"] = error is OperationCanceledException
-            ? "IBKR market data timed out; showing fallback candles"
+            ? $"{marketDataRouterProvider.ActiveSource} market data timed out; showing fallback candles"
             : error.Message;
 
         return Results.Ok(fallbackCandles);
@@ -354,6 +438,8 @@ app.MapGet("/api/market-data/candles", async (
 
 app.MapPost("/api/market-data/stream", async (
     MarketDataStreamRequest request,
+    BrokerSettingsStore brokerSettingsStore,
+    TastytradeRealtimeMarketDataService tastytradeRealtimeMarketDataService,
     IBKRConnectionSession connectionSession,
     CancellationToken cancellationToken) =>
 {
@@ -361,12 +447,23 @@ app.MapPost("/api/market-data/stream", async (
         ? "MNQ1!"
         : request.Symbol.Trim().ToUpperInvariant();
 
-    await connectionSession.EnsureStreamingMarketDataAsync(normalizedSymbol, cancellationToken);
+    var brokerSettings = brokerSettingsStore.Get();
+    if (brokerSettings.Mode.Equals("IBKR", StringComparison.OrdinalIgnoreCase))
+    {
+        await connectionSession.EnsureStreamingMarketDataAsync(normalizedSymbol, cancellationToken);
+    }
+    else if (brokerSettings.Mode.Equals("Tastytrade", StringComparison.OrdinalIgnoreCase))
+    {
+        await tastytradeRealtimeMarketDataService.EnsureStreamingMarketDataAsync(normalizedSymbol, cancellationToken);
+    }
 
     return Results.Ok(new
     {
         ok = true,
-        symbol = normalizedSymbol
+        symbol = normalizedSymbol,
+        source = brokerSettings.Mode.Equals("Tastytrade", StringComparison.OrdinalIgnoreCase)
+            ? "tastytrade"
+            : brokerSettings.Mode.Equals("IBKR", StringComparison.OrdinalIgnoreCase) ? "ibkr" : "fallback"
     });
 })
 .WithName("StartMarketDataStream")
@@ -389,6 +486,7 @@ app.MapPut("/api/broker/settings", async (BrokerSettingsUpdateRequest request, B
     {
         Mode = request.Mode,
         IbkrEnvironment = request.IbkrEnvironment,
+        TastytradeEnvironment = request.TastytradeEnvironment,
         IbkrPaper = new IBKRSettings
         {
             Host = request.IbkrPaper.Host,
@@ -406,6 +504,42 @@ app.MapPut("/api/broker/settings", async (BrokerSettingsUpdateRequest request, B
             Account = request.IbkrLive.Account,
             Enabled = request.IbkrLive.Enabled,
             ReadOnly = request.IbkrLive.ReadOnly
+        },
+        TastytradeSandbox = new TastytradeSettings
+        {
+            ApiBaseUrl = request.TastytradeSandbox.ApiBaseUrl,
+            StreamerBaseUrl = request.TastytradeSandbox.StreamerBaseUrl,
+            AuthorizationUrl = request.TastytradeSandbox.AuthorizationUrl,
+            TokenUrl = request.TastytradeSandbox.TokenUrl,
+            ClientId = request.TastytradeSandbox.ClientId,
+            ClientSecret = request.TastytradeSandbox.ClientSecret,
+            RedirectUri = request.TastytradeSandbox.RedirectUri,
+            Username = request.TastytradeSandbox.Username,
+            Password = request.TastytradeSandbox.Password,
+            AccessToken = request.TastytradeSandbox.AccessToken,
+            RefreshToken = request.TastytradeSandbox.RefreshToken,
+            AccessTokenExpiresAt = request.TastytradeSandbox.AccessTokenExpiresAt,
+            AccountNumber = request.TastytradeSandbox.AccountNumber,
+            Enabled = request.TastytradeSandbox.Enabled,
+            ReadOnly = request.TastytradeSandbox.ReadOnly
+        },
+        TastytradeLive = new TastytradeSettings
+        {
+            ApiBaseUrl = request.TastytradeLive.ApiBaseUrl,
+            StreamerBaseUrl = request.TastytradeLive.StreamerBaseUrl,
+            AuthorizationUrl = request.TastytradeLive.AuthorizationUrl,
+            TokenUrl = request.TastytradeLive.TokenUrl,
+            ClientId = request.TastytradeLive.ClientId,
+            ClientSecret = request.TastytradeLive.ClientSecret,
+            RedirectUri = request.TastytradeLive.RedirectUri,
+            Username = request.TastytradeLive.Username,
+            Password = request.TastytradeLive.Password,
+            AccessToken = request.TastytradeLive.AccessToken,
+            RefreshToken = request.TastytradeLive.RefreshToken,
+            AccessTokenExpiresAt = request.TastytradeLive.AccessTokenExpiresAt,
+            AccountNumber = request.TastytradeLive.AccountNumber,
+            Enabled = request.TastytradeLive.Enabled,
+            ReadOnly = request.TastytradeLive.ReadOnly
         }
     });
 
@@ -426,9 +560,12 @@ app.MapPut("/api/broker/settings", async (BrokerSettingsUpdateRequest request, B
 .WithName("UpdateBrokerSettings")
 .WithOpenApi();
 
-app.MapPost("/api/broker/test-connection", async (IBKRConnectionTester tester, TradingDbContext db, IHubContext<TradingHub> hub, CancellationToken cancellationToken) =>
+app.MapPost("/api/broker/test-connection", async (BrokerSettingsStore settingsStore, IBKRConnectionTester ibkrTester, TastytradeConnectionTester tastytradeTester, TradingDbContext db, IHubContext<TradingHub> hub, CancellationToken cancellationToken) =>
 {
-    var result = await tester.TestAsync(cancellationToken);
+    var settings = settingsStore.Get();
+    var result = settings.Mode.Equals("Tastytrade", StringComparison.OrdinalIgnoreCase)
+        ? await tastytradeTester.TestAsync(cancellationToken)
+        : await ibkrTester.TestAsync(cancellationToken);
     foreach (var audit in BuildBrokerConnectionAudit(result))
     {
         db.AuditLogs.Add(audit);
@@ -441,6 +578,97 @@ app.MapPost("/api/broker/test-connection", async (IBKRConnectionTester tester, T
     return Results.Ok(BrokerConnectionTestResponse.FromResult(result));
 })
 .WithName("TestBrokerConnection")
+.WithOpenApi();
+
+app.MapPost("/api/tastytrade/oauth/start", (TastytradeOAuthService oauthService) =>
+{
+    try
+    {
+        var result = oauthService.BuildAuthorizationUrl();
+        return Results.Ok(new
+        {
+            authorization_url = result.AuthorizationUrl,
+            environment = result.Environment,
+            redirect_uri = result.RedirectUri
+        });
+    }
+    catch (InvalidOperationException error)
+    {
+        return Results.BadRequest(new ValidationErrorResponse([error.Message]));
+    }
+})
+.WithName("StartTastytradeOAuth")
+.WithOpenApi();
+
+app.MapPost("/api/tastytrade/oauth/refresh", async (TastytradeOAuthService oauthService, TradingDbContext db, IHubContext<TradingHub> hub, CancellationToken cancellationToken) =>
+{
+    var result = await oauthService.RefreshAccessTokenAsync(cancellationToken);
+    db.AuditLogs.Add(AuditLogRecord.BrokerAction(
+        result.Ok ? "tastytrade.token_refreshed" : "tastytrade.token_refresh_failed",
+        result.Message));
+    await db.SaveChangesAsync(cancellationToken);
+
+    if (result.Ok)
+    {
+        await BroadcastTradingUpdateAsync(hub, "broker.settings_updated", null);
+    }
+
+    return result.Ok
+        ? Results.Ok(new
+        {
+            ok = true,
+            message = result.Message,
+            environment = result.Environment,
+            access_token_expires_at = result.AccessTokenExpiresAt
+        })
+        : Results.BadRequest(new ValidationErrorResponse([result.Message]));
+})
+.WithName("RefreshTastytradeOAuthToken")
+.WithOpenApi();
+
+app.MapGet("/api/tastytrade/oauth/callback", async (string? code, string? state, string? error, TastytradeOAuthService oauthService, TradingDbContext db, IHubContext<TradingHub> hub, CancellationToken cancellationToken) =>
+{
+    var result = await oauthService.HandleCallbackAsync(code, state, error, cancellationToken);
+    db.AuditLogs.Add(AuditLogRecord.BrokerAction(
+        result.Ok ? "tastytrade.oauth_connected" : "tastytrade.oauth_failed",
+        result.Message));
+    await db.SaveChangesAsync(cancellationToken);
+
+    if (result.Ok)
+    {
+        await BroadcastTradingUpdateAsync(hub, "broker.settings_updated", null);
+    }
+
+    var title = result.Ok ? "Tastytrade connected" : "Tastytrade connection failed";
+    var color = result.Ok ? "#13795b" : "#b42318";
+    var html = $$"""
+        <!doctype html>
+        <html lang="en">
+        <head>
+          <meta charset="utf-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1">
+          <title>{{title}}</title>
+          <style>
+            body { font-family: Arial, sans-serif; margin: 40px; color: #111827; }
+            .box { max-width: 720px; border: 1px solid #d7dee8; border-radius: 8px; padding: 24px; }
+            h1 { color: {{color}}; font-size: 22px; margin: 0 0 12px; }
+            p { line-height: 1.5; }
+            code { background: #f3f4f6; padding: 2px 5px; border-radius: 4px; }
+          </style>
+        </head>
+        <body>
+          <div class="box">
+            <h1>{{title}}</h1>
+            <p>{{System.Net.WebUtility.HtmlEncode(result.Message)}}</p>
+            <p>You can close this window and return to RoniAT.</p>
+          </div>
+        </body>
+        </html>
+        """;
+
+    return Results.Content(html, "text/html; charset=utf-8");
+})
+.WithName("TastytradeOAuthCallback")
 .WithOpenApi();
 
 app.MapGet("/api/risk/settings", (RiskSettingsStore settingsStore) =>
@@ -683,6 +911,19 @@ static IReadOnlyList<AuditLogRecord> BuildBrokerConnectionAudit(BrokerConnection
 {
     if (!result.Mode.Equals("IBKR", StringComparison.OrdinalIgnoreCase))
     {
+        if (result.Mode.Equals("Tastytrade", StringComparison.OrdinalIgnoreCase))
+        {
+            return
+            [
+                AuditLogRecord.BrokerAction(
+                    result.HandshakeOk ? "tastytrade.token_verified" : "tastytrade.token_failed",
+                    $"Tastytrade {result.Environment} API test to {result.Host} - {result.Message}"),
+                AuditLogRecord.BrokerAction(
+                    result.Ok ? "broker.connection_test_succeeded" : "broker.connection_test_failed",
+                    $"{result.Mode} {result.Environment} connection test to {result.Host} - {result.Message}")
+            ];
+        }
+
         return
         [
             AuditLogRecord.BrokerAction(

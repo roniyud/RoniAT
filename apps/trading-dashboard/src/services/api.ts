@@ -125,6 +125,42 @@ export async function testBrokerConnection() {
   return response.json() as Promise<BrokerConnectionTestResult>
 }
 
+export async function startTastytradeOAuth() {
+  const response = await fetch(`${API_BASE_URL}/api/tastytrade/oauth/start`, {
+    method: 'POST',
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+      ...authHeaders(),
+    },
+    body: JSON.stringify({}),
+  })
+
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status} from Trading Engine`)
+  }
+
+  return response.json() as Promise<{ authorization_url: string; environment: string; redirect_uri: string }>
+}
+
+export async function refreshTastytradeAccessToken() {
+  const response = await fetch(`${API_BASE_URL}/api/tastytrade/oauth/refresh`, {
+    method: 'POST',
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+      ...authHeaders(),
+    },
+    body: JSON.stringify({}),
+  })
+
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status} from Trading Engine`)
+  }
+
+  return response.json() as Promise<{ ok: boolean; message: string; environment: string; access_token_expires_at?: string | null }>
+}
+
 export async function getRiskSettings() {
   return request<RiskSettings>('/api/risk/settings')
 }

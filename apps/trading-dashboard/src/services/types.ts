@@ -144,11 +144,32 @@ export type IBKRSettings = {
   read_only: boolean
 }
 
+export type TastytradeSettings = {
+  api_base_url: string
+  streamer_base_url: string
+  authorization_url: string
+  token_url: string
+  client_id: string
+  client_secret: string
+  redirect_uri: string
+  username: string
+  password: string
+  access_token: string
+  refresh_token: string
+  access_token_expires_at?: string | null
+  account_number: string
+  enabled: boolean
+  read_only: boolean
+}
+
 export type BrokerSettings = {
-  mode: 'Paper' | 'IBKR'
+  mode: 'Paper' | 'IBKR' | 'Tastytrade'
   ibkr_environment: 'Paper' | 'Live'
+  tastytrade_environment: 'Sandbox' | 'Live'
   ibkr_paper: IBKRSettings
   ibkr_live: IBKRSettings
+  tastytrade_sandbox: TastytradeSettings
+  tastytrade_live: TastytradeSettings
 }
 
 export type RiskSettings = {

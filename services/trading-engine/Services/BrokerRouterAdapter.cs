@@ -6,7 +6,8 @@ namespace RoniAT.TradingEngine.Services;
 public sealed class BrokerRouterAdapter(
     BrokerSettingsStore settingsStore,
     PaperBrokerAdapter paperBrokerAdapter,
-    IBKRBrokerAdapter ibkrBrokerAdapter) : IBrokerAdapter
+    IBKRBrokerAdapter ibkrBrokerAdapter,
+    TastytradeBrokerAdapter tastytradeBrokerAdapter) : IBrokerAdapter
 {
     public string Name => ActiveAdapter.Name;
 
@@ -50,9 +51,17 @@ public sealed class BrokerRouterAdapter(
         get
         {
             var settings = settingsStore.Get();
-            return settings.Mode.Equals("IBKR", StringComparison.OrdinalIgnoreCase)
-                ? ibkrBrokerAdapter
-                : paperBrokerAdapter;
+            if (settings.Mode.Equals("IBKR", StringComparison.OrdinalIgnoreCase))
+            {
+                return ibkrBrokerAdapter;
+            }
+
+            if (settings.Mode.Equals("Tastytrade", StringComparison.OrdinalIgnoreCase))
+            {
+                return tastytradeBrokerAdapter;
+            }
+
+            return paperBrokerAdapter;
         }
     }
 }

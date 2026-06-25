@@ -36,6 +36,7 @@ import {
   login,
   lockTrading,
   logout,
+  refreshTastytradeAccessToken,
   resumeTrading,
   submitMarketOrder,
   submitManualTrade,
@@ -47,7 +48,7 @@ import {
 import { getCandles, startMarketDataStream, type Timeframe } from './services/market-data'
 import type { CandlestickData, UTCTimestamp } from 'lightweight-charts'
 import { createTradingRealtimeClient, type MarketTick, type RealtimeStatus, type TradingUpdate } from './services/realtime'
-import type { ApiState, AuditLogRecord, BrokerConnectionTestResult, BrokerMode, BrokerSettings, ClosedPositionRecord, DailyPerformance, IBKRSettings, MarketOrderResponse, OrderRecord, PositionRecord, RiskSettings, TradingSignal, TradingSignalRequest } from './services/types'
+import type { ApiState, AuditLogRecord, BrokerConnectionTestResult, BrokerMode, BrokerSettings, ClosedPositionRecord, DailyPerformance, IBKRSettings, MarketOrderResponse, OrderRecord, PositionRecord, RiskSettings, TastytradeSettings, TradingSignal, TradingSignalRequest } from './services/types'
 
 const apiState = ref<ApiState>('loading')
 const isAuthenticated = ref(Boolean(getAuthToken()))
@@ -75,6 +76,7 @@ const activeAction = ref('')
 const isSavingRisk = ref(false)
 const isSavingBroker = ref(false)
 const isTestingBroker = ref(false)
+const isRefreshingTastytradeToken = ref(false)
 const isSubmittingTrade = ref(false)
 const isSafetyActionRunning = ref(false)
 const riskSaveMessage = ref('')
@@ -345,7 +347,7 @@ async function refreshCandles(showLoading = true) {
     const result = await getCandles(chartSymbol.value, selectedTimeframe.value)
     chartCandles.value = result.candles
     chartMarketDataWarning.value = result.source === 'fallback'
-      ? `Simulated fallback candles. IBKR market data failed: ${result.warning || 'historical data unavailable'}`
+      ? `Simulated fallback candles. Market data failed: ${result.warning || 'historical data unavailable'}`
       : ''
   } catch (error) {
     chartCandles.value = []
@@ -583,6 +585,33 @@ async function handleTestBrokerConnection() {
   }
 }
 
+async function handleRefreshTastytradeToken() {
+  if (!brokerForm.value) return
+
+  isRefreshingTastytradeToken.value = true
+  brokerSaveMessage.value = ''
+  errorMessage.value = ''
+
+  try {
+    brokerForm.value.mode = 'Tastytrade'
+    const saved = await updateBrokerSettings(normalizeBrokerSettings(brokerForm.value))
+    brokerSettings.value = saved
+    brokerForm.value = cloneBrokerSettings(saved)
+    const result = await refreshTastytradeAccessToken()
+    const latestBrokerSettings = await getBrokerSettings()
+    brokerSettings.value = latestBrokerSettings
+    brokerForm.value = cloneBrokerSettings(latestBrokerSettings)
+    brokerSaveMessage.value = result.access_token_expires_at
+      ? `${result.message}. Expires at ${formatDateTime(result.access_token_expires_at)}`
+      : result.message
+    await refreshData()
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : 'Tastytrade token refresh failed'
+  } finally {
+    isRefreshingTastytradeToken.value = false
+  }
+}
+
 async function handleSubmitManualTrade() {
   isSubmittingTrade.value = true
   tradeMessage.value = ''
@@ -808,8 +837,11 @@ function cloneBrokerSettings(settings: BrokerSettings): BrokerSettings {
   return {
     mode: settings.mode,
     ibkr_environment: settings.ibkr_environment,
+    tastytrade_environment: settings.tastytrade_environment,
     ibkr_paper: { ...settings.ibkr_paper },
     ibkr_live: { ...settings.ibkr_live },
+    tastytrade_sandbox: { ...settings.tastytrade_sandbox },
+    tastytrade_live: { ...settings.tastytrade_live },
   }
 }
 
@@ -817,8 +849,11 @@ function normalizeBrokerSettings(settings: BrokerSettings): BrokerSettings {
   return {
     mode: settings.mode,
     ibkr_environment: settings.ibkr_environment,
+    tastytrade_environment: settings.tastytrade_environment,
     ibkr_paper: normalizeIBKRSettings(settings.ibkr_paper),
     ibkr_live: normalizeIBKRSettings(settings.ibkr_live),
+    tastytrade_sandbox: normalizeTastytradeSettings(settings.tastytrade_sandbox, true),
+    tastytrade_live: normalizeTastytradeSettings(settings.tastytrade_live, false),
   }
 }
 
@@ -828,6 +863,27 @@ function normalizeIBKRSettings(settings: IBKRSettings): IBKRSettings {
     port: Number(settings.port),
     client_id: Number(settings.client_id),
     account: settings.account.trim(),
+    enabled: settings.enabled,
+    read_only: settings.read_only,
+  }
+}
+
+function normalizeTastytradeSettings(settings: TastytradeSettings, sandboxDefaults: boolean): TastytradeSettings {
+  const apiBaseUrl = settings.api_base_url.trim() || (sandboxDefaults ? 'https://api.cert.tastyworks.com' : 'https://api.tastyworks.com')
+  return {
+    api_base_url: apiBaseUrl,
+    streamer_base_url: settings.streamer_base_url.trim() || (sandboxDefaults ? 'wss://streamer.cert.tastyworks.com' : 'wss://streamer.tastyworks.com'),
+    authorization_url: settings.authorization_url.trim() || `${apiBaseUrl}/oauth/authorize`,
+    token_url: settings.token_url.trim() || `${apiBaseUrl}/oauth/token`,
+    client_id: settings.client_id.trim(),
+    client_secret: settings.client_secret,
+    redirect_uri: settings.redirect_uri.trim() || 'http://localhost:3001/api/tastytrade/oauth/callback',
+    username: settings.username.trim(),
+    password: settings.password,
+    access_token: settings.access_token.trim(),
+    refresh_token: settings.refresh_token.trim(),
+    access_token_expires_at: settings.access_token_expires_at ?? null,
+    account_number: settings.account_number.trim(),
     enabled: settings.enabled,
     read_only: settings.read_only,
   }
@@ -1545,24 +1601,50 @@ watch(closedPositionsDate, () => {
             <h3>Broker Mode</h3>
           </div>
 
-          <div class="side-control">
+          <div class="broker-card-grid" aria-label="Broker mode">
             <button
+              class="broker-choice-card"
               type="button"
               :class="{ active: brokerForm.mode === 'Paper' }"
               @click="brokerForm.mode = 'Paper'"
             >
-              PAPER
+              <span>
+                <strong>Paper</strong>
+                <small>Local simulator</small>
+              </span>
+              <span class="status-pill paper-position-opened">Ready</span>
             </button>
             <button
+              class="broker-choice-card"
               type="button"
               :class="{ active: brokerForm.mode === 'IBKR' }"
               @click="brokerForm.mode = 'IBKR'"
             >
-              IBKR
+              <span>
+                <strong>IBKR</strong>
+                <small>{{ brokerForm.ibkr_environment }} / {{ brokerForm.ibkr_environment === 'Live' ? brokerForm.ibkr_live.account || 'No account' : brokerForm.ibkr_paper.account || 'No account' }}</small>
+              </span>
+              <span class="status-pill" :class="(brokerForm.ibkr_environment === 'Live' ? brokerForm.ibkr_live.enabled : brokerForm.ibkr_paper.enabled) ? 'paper-position-opened' : 'rejected-by-risk'">
+                {{ (brokerForm.ibkr_environment === 'Live' ? brokerForm.ibkr_live.enabled : brokerForm.ibkr_paper.enabled) ? 'Enabled' : 'Disabled' }}
+              </span>
+            </button>
+            <button
+              class="broker-choice-card"
+              type="button"
+              :class="{ active: brokerForm.mode === 'Tastytrade' }"
+              @click="brokerForm.mode = 'Tastytrade'"
+            >
+              <span>
+                <strong>Tastytrade</strong>
+                <small>{{ brokerForm.tastytrade_environment }} / {{ brokerForm.tastytrade_environment === 'Live' ? brokerForm.tastytrade_live.account_number || 'No account' : brokerForm.tastytrade_sandbox.account_number || 'No account' }}</small>
+              </span>
+              <span class="status-pill" :class="(brokerForm.tastytrade_environment === 'Live' ? brokerForm.tastytrade_live.enabled : brokerForm.tastytrade_sandbox.enabled) ? 'paper-position-opened' : 'rejected-by-risk'">
+                {{ (brokerForm.tastytrade_environment === 'Live' ? brokerForm.tastytrade_live.enabled : brokerForm.tastytrade_sandbox.enabled) ? 'Enabled' : 'Disabled' }}
+              </span>
             </button>
           </div>
 
-          <div class="broker-environment-tabs" role="tablist" aria-label="IBKR environment settings">
+          <div v-if="brokerForm.mode === 'IBKR'" class="broker-environment-tabs" role="tablist" aria-label="IBKR environment settings">
             <button
               type="button"
               role="tab"
@@ -1583,7 +1665,42 @@ watch(closedPositionsDate, () => {
             </button>
           </div>
 
-          <section v-if="brokerForm.ibkr_environment === 'Paper'" class="broker-environment-panel" role="tabpanel">
+          <div v-else-if="brokerForm.mode === 'Tastytrade'" class="broker-environment-tabs" role="tablist" aria-label="Tastytrade environment settings">
+            <button
+              type="button"
+              role="tab"
+              :aria-selected="brokerForm.tastytrade_environment === 'Sandbox'"
+              :class="{ active: brokerForm.tastytrade_environment === 'Sandbox' }"
+              @click="brokerForm.tastytrade_environment = 'Sandbox'"
+            >
+              Sandbox
+            </button>
+            <button
+              type="button"
+              role="tab"
+              :aria-selected="brokerForm.tastytrade_environment === 'Live'"
+              :class="{ active: brokerForm.tastytrade_environment === 'Live' }"
+              @click="brokerForm.tastytrade_environment = 'Live'"
+            >
+              Live
+            </button>
+          </div>
+
+          <section v-if="brokerForm.mode === 'Paper'" class="broker-environment-panel" role="tabpanel">
+            <div class="broker-environment-heading">
+              <div>
+                <span>Selected Broker</span>
+                <strong>Paper Simulator</strong>
+              </div>
+              <span class="status-pill paper-position-opened">Active</span>
+            </div>
+
+            <div class="broker-note">
+              Paper mode uses the local simulated broker. It does not require external API credentials and does not connect to a real brokerage account.
+            </div>
+          </section>
+
+          <section v-else-if="brokerForm.mode === 'IBKR' && brokerForm.ibkr_environment === 'Paper'" class="broker-environment-panel" role="tabpanel">
             <div class="broker-environment-heading">
               <div>
                 <span>Selected Environment</span>
@@ -1630,7 +1747,7 @@ watch(closedPositionsDate, () => {
             </label>
           </section>
 
-          <section v-else class="broker-environment-panel live" role="tabpanel">
+          <section v-else-if="brokerForm.mode === 'IBKR'" class="broker-environment-panel live" role="tabpanel">
             <div class="broker-environment-heading">
               <div>
                 <span>Selected Environment</span>
@@ -1674,6 +1791,158 @@ watch(closedPositionsDate, () => {
                 <small>{{ brokerForm.ibkr_live.read_only ? 'Read only' : 'Order capable later' }}</small>
               </span>
               <input v-model="brokerForm.ibkr_live.read_only" type="checkbox" />
+            </label>
+          </section>
+
+          <section v-else-if="brokerForm.mode === 'Tastytrade' && brokerForm.tastytrade_environment === 'Sandbox'" class="broker-environment-panel" role="tabpanel">
+            <div class="broker-environment-heading">
+              <div>
+                <span>Selected Environment</span>
+                <strong>Tastytrade Sandbox</strong>
+              </div>
+              <span class="status-pill" :class="brokerForm.tastytrade_sandbox.enabled ? 'paper-position-opened' : 'rejected-by-risk'">
+                {{ brokerForm.tastytrade_sandbox.enabled ? 'Enabled' : 'Disabled' }}
+              </span>
+            </div>
+
+            <div class="settings-grid">
+              <label>
+                <span>API Base URL</span>
+                <input v-model="brokerForm.tastytrade_sandbox.api_base_url" type="text" autocomplete="off" spellcheck="false" />
+              </label>
+              <label>
+                <span>Streamer URL</span>
+                <input v-model="brokerForm.tastytrade_sandbox.streamer_base_url" type="text" autocomplete="off" spellcheck="false" />
+              </label>
+              <label>
+                <span>Authorization URL</span>
+                <input v-model="brokerForm.tastytrade_sandbox.authorization_url" type="text" autocomplete="off" spellcheck="false" />
+              </label>
+              <label>
+                <span>Token URL</span>
+                <input v-model="brokerForm.tastytrade_sandbox.token_url" type="text" autocomplete="off" spellcheck="false" />
+              </label>
+              <label>
+                <span>Client ID</span>
+                <input v-model="brokerForm.tastytrade_sandbox.client_id" type="text" autocomplete="off" spellcheck="false" />
+              </label>
+              <label>
+                <span>Client Secret</span>
+                <input v-model="brokerForm.tastytrade_sandbox.client_secret" type="password" autocomplete="new-password" />
+              </label>
+              <label class="wide-field">
+                <span>Redirect URI</span>
+                <input v-model="brokerForm.tastytrade_sandbox.redirect_uri" type="text" autocomplete="off" spellcheck="false" />
+              </label>
+              <label>
+                <span>OAuth Access Token</span>
+                <input v-model="brokerForm.tastytrade_sandbox.access_token" type="password" autocomplete="off" spellcheck="false" />
+              </label>
+              <label>
+                <span>OAuth Refresh Token</span>
+                <input v-model="brokerForm.tastytrade_sandbox.refresh_token" type="password" autocomplete="off" spellcheck="false" />
+              </label>
+              <label>
+                <span>Account Number</span>
+                <input v-model="brokerForm.tastytrade_sandbox.account_number" type="text" autocomplete="off" spellcheck="false" />
+              </label>
+            </div>
+
+            <button class="action-button secondary" type="button" :disabled="isSavingBroker || isRefreshingTastytradeToken" @click="handleRefreshTastytradeToken">
+              <Server :size="16" />
+              <span>{{ isRefreshingTastytradeToken ? 'Refreshing Token' : 'Refresh Access Token' }}</span>
+            </button>
+
+            <label class="toggle-row">
+              <span>
+                <strong>Enable Tastytrade Sandbox</strong>
+                <small>{{ brokerForm.tastytrade_sandbox.enabled ? 'Enabled' : 'Disabled' }}</small>
+              </span>
+              <input v-model="brokerForm.tastytrade_sandbox.enabled" type="checkbox" />
+            </label>
+
+            <label class="toggle-row">
+              <span>
+                <strong>Sandbox Read Only</strong>
+                <small>{{ brokerForm.tastytrade_sandbox.read_only ? 'Blocks order placement from RoniAT' : 'Order capable later' }}</small>
+              </span>
+              <input v-model="brokerForm.tastytrade_sandbox.read_only" type="checkbox" />
+            </label>
+          </section>
+
+          <section v-else class="broker-environment-panel live" role="tabpanel">
+            <div class="broker-environment-heading">
+              <div>
+                <span>Selected Environment</span>
+                <strong>Tastytrade Live</strong>
+              </div>
+              <span class="status-pill" :class="brokerForm.tastytrade_live.enabled ? 'paper-position-opened' : 'rejected-by-risk'">
+                {{ brokerForm.tastytrade_live.enabled ? 'Enabled' : 'Disabled' }}
+              </span>
+            </div>
+
+            <div class="settings-grid">
+              <label>
+                <span>API Base URL</span>
+                <input v-model="brokerForm.tastytrade_live.api_base_url" type="text" autocomplete="off" spellcheck="false" />
+              </label>
+              <label>
+                <span>Streamer URL</span>
+                <input v-model="brokerForm.tastytrade_live.streamer_base_url" type="text" autocomplete="off" spellcheck="false" />
+              </label>
+              <label>
+                <span>Authorization URL</span>
+                <input v-model="brokerForm.tastytrade_live.authorization_url" type="text" autocomplete="off" spellcheck="false" />
+              </label>
+              <label>
+                <span>Token URL</span>
+                <input v-model="brokerForm.tastytrade_live.token_url" type="text" autocomplete="off" spellcheck="false" />
+              </label>
+              <label>
+                <span>Client ID</span>
+                <input v-model="brokerForm.tastytrade_live.client_id" type="text" autocomplete="off" spellcheck="false" />
+              </label>
+              <label>
+                <span>Client Secret</span>
+                <input v-model="brokerForm.tastytrade_live.client_secret" type="password" autocomplete="new-password" />
+              </label>
+              <label class="wide-field">
+                <span>Redirect URI</span>
+                <input v-model="brokerForm.tastytrade_live.redirect_uri" type="text" autocomplete="off" spellcheck="false" />
+              </label>
+              <label>
+                <span>OAuth Access Token</span>
+                <input v-model="brokerForm.tastytrade_live.access_token" type="password" autocomplete="off" spellcheck="false" />
+              </label>
+              <label>
+                <span>OAuth Refresh Token</span>
+                <input v-model="brokerForm.tastytrade_live.refresh_token" type="password" autocomplete="off" spellcheck="false" />
+              </label>
+              <label>
+                <span>Account Number</span>
+                <input v-model="brokerForm.tastytrade_live.account_number" type="text" autocomplete="off" spellcheck="false" />
+              </label>
+            </div>
+
+            <button class="action-button secondary" type="button" :disabled="isSavingBroker || isRefreshingTastytradeToken" @click="handleRefreshTastytradeToken">
+              <Server :size="16" />
+              <span>{{ isRefreshingTastytradeToken ? 'Refreshing Token' : 'Refresh Access Token' }}</span>
+            </button>
+
+            <label class="toggle-row">
+              <span>
+                <strong>Enable Tastytrade Live</strong>
+                <small>{{ brokerForm.tastytrade_live.enabled ? 'Enabled' : 'Disabled' }}</small>
+              </span>
+              <input v-model="brokerForm.tastytrade_live.enabled" type="checkbox" />
+            </label>
+
+            <label class="toggle-row">
+              <span>
+                <strong>Live Read Only</strong>
+                <small>{{ brokerForm.tastytrade_live.read_only ? 'Read only' : 'Order capable later' }}</small>
+              </span>
+              <input v-model="brokerForm.tastytrade_live.read_only" type="checkbox" />
             </label>
           </section>
 
