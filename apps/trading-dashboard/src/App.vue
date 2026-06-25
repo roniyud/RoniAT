@@ -157,6 +157,7 @@ const chartLevels = computed(() => {
   const levels: { id: string; label: string; price: number; color: string; draggable?: 'stop_loss' | 'take_profit'; style?: 'solid' | 'dashed' | 'dotted' }[] = []
   const symbolPosition = positions.value.find((position) => normalizeSymbol(position.symbol) === symbol)
   const symbolOrders = orders.value.filter((order) => normalizeSymbol(order.symbol) === symbol && order.status === 'working')
+  const hasSystemManagedProtection = symbolOrders.some((order) => isSystemManagedProtectionOrder(order.orderType))
   const hasPositionProtection = symbolPosition?.stopLoss != null
     || symbolPosition?.takeProfit1 != null
     || symbolPosition?.takeProfit2 != null
@@ -171,10 +172,10 @@ const chartLevels = computed(() => {
     })
 
     if (symbolPosition.stopLoss != null) {
-      levels.push({ id: `position-${symbolPosition.id}-sl`, label: 'SL', price: symbolPosition.stopLoss, color: '#b42318', draggable: 'stop_loss', style: 'dotted' })
+      levels.push({ id: `position-${symbolPosition.id}-sl`, label: hasSystemManagedProtection ? 'Managed SL' : 'SL', price: symbolPosition.stopLoss, color: '#b42318', draggable: 'stop_loss', style: 'dotted' })
     }
     if (symbolPosition.takeProfit1 != null) {
-      levels.push({ id: `position-${symbolPosition.id}-tp1`, label: 'TP', price: symbolPosition.takeProfit1, color: '#13795b', draggable: 'take_profit', style: 'dotted' })
+      levels.push({ id: `position-${symbolPosition.id}-tp1`, label: hasSystemManagedProtection ? 'Managed TP' : 'TP', price: symbolPosition.takeProfit1, color: '#13795b', draggable: 'take_profit', style: 'dotted' })
     }
     if (symbolPosition.takeProfit2 != null) {
       levels.push({ id: `position-${symbolPosition.id}-tp2`, label: 'Pos TP2', price: symbolPosition.takeProfit2, color: '#0f766e', style: 'dotted' })
@@ -281,6 +282,10 @@ function normalizeMarketDataSymbol(symbol?: string | null) {
 function isProtectionOrder(orderType: string) {
   const normalized = orderType.toLowerCase()
   return normalized.includes('stop_loss') || normalized.includes('take_profit')
+}
+
+function isSystemManagedProtectionOrder(orderType: string) {
+  return orderType === 'system_stop_loss' || orderType === 'system_take_profit'
 }
 
 function getPointValue(symbol: string) {
@@ -1402,7 +1407,10 @@ watch(closedPositionsDate, () => {
                 <td>{{ formatDateTime(order.createdAt) }}</td>
                 <td class="symbol-cell">{{ order.symbol }}</td>
                 <td>{{ order.direction }}</td>
-                <td>{{ order.orderType }}</td>
+                <td>
+                  {{ order.orderType }}
+                  <span v-if="isSystemManagedProtectionOrder(order.orderType)" class="ownership-badge managed">System Managed</span>
+                </td>
                 <td>{{ order.quantity }}</td>
                 <td>{{ formatPrice(order.price) }}</td>
                 <td>{{ formatPrice(order.stopPrice) }}</td>
@@ -2082,6 +2090,14 @@ watch(closedPositionsDate, () => {
               <small>{{ riskForm.close_unmanaged_broker_positions ? 'Immediately closes broker positions not owned by this system' : 'Manual broker positions are only displayed' }}</small>
             </span>
             <input v-model="riskForm.close_unmanaged_broker_positions" type="checkbox" />
+          </label>
+
+          <label class="toggle-row">
+            <span>
+              <strong>System Managed Protection</strong>
+              <small>{{ riskForm.system_managed_protection_enabled ? 'TP/SL stay inside RoniAT and close with market orders' : 'TP/SL are submitted to the broker when supported' }}</small>
+            </span>
+            <input v-model="riskForm.system_managed_protection_enabled" type="checkbox" />
           </label>
 
           <div class="settings-section-title">

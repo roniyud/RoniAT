@@ -1,0 +1,57 @@
+sequenceDiagram
+    autonumber
+
+    actor Trader as User or Signal
+    participant UI as Dashboard or WhatsApp Listener
+    participant API as Trading Engine API
+    participant Risk as Risk Validator
+    participant Broker as Broker Adapter
+    participant DB as SQLite
+    participant Protect as SystemManagedProtectionService
+    participant Feed as Market Data
+    participant ExtBroker as Broker
+
+    Trader->>UI: Submit entry order with TP/SL
+    UI->>API: POST /api/market-orders or /api/signals
+    API->>Risk: Validate symbol, size, loss limits, state
+
+    alt Risk rejected
+        Risk-->>API: Rejected with reasons
+        API->>DB: Save signal/order rejection + audit
+        API-->>UI: rejected_by_risk
+    else Risk approved
+        Risk-->>API: Approved
+        API->>Broker: Place entry market order only
+        Broker->>ExtBroker: BUY/SELL market
+        ExtBroker-->>Broker: Fill / submitted status
+        Broker->>DB: Save market order + position
+
+        alt System Managed Protection enabled
+            Broker->>DB: Create system_stop_loss
+            Broker->>DB: Create system_take_profit
+            Broker->>DB: Mark position managed with SL/TP
+            API-->>UI: Market order submitted + managed protection
+        else Broker-side protection
+            Broker->>ExtBroker: Submit broker TP/SL or OCO/OCA
+            Broker->>DB: Save broker protective orders
+            API-->>UI: Market order submitted + broker protection
+        end
+    end
+
+    loop Every 1 second while system-managed orders are working
+        Protect->>DB: Load managed positions and system orders
+        Protect->>Feed: Get latest price
+        Feed-->>Protect: Last price
+
+        alt Price reaches managed TP or SL
+            Protect->>DB: Mark triggered order
+            Protect->>Broker: Close position with market order
+            Broker->>ExtBroker: Closing BUY/SELL market
+            ExtBroker-->>Broker: Fill / submitted status
+            Broker->>DB: Cancel remaining managed order
+            Broker->>DB: Record closed position / P&L
+            Protect-->>UI: SignalR trading.updated
+        else No trigger
+            Protect-->>Protect: Wait for next tick
+        end
+    end

@@ -162,6 +162,12 @@ public sealed class PaperBrokerAdapter(
             var effectiveTakeProfit = takeProfit ?? calculatedTakeProfit;
             var exitDirection = normalizedDirection == "LONG" ? "SHORT" : "LONG";
 
+            if (riskSettingsStore.Get().SystemManagedProtectionEnabled)
+            {
+                await SystemManagedProtectionOrders.ReplaceAsync(db, position, effectiveStopLoss, effectiveTakeProfit, now);
+            }
+            else
+            {
             position.StopLoss = effectiveStopLoss;
             position.TakeProfit1 = effectiveTakeProfit;
             position.TakeProfit2 = null;
@@ -192,6 +198,7 @@ public sealed class PaperBrokerAdapter(
                 CreatedAt = now,
                 UpdatedAt = now
             });
+            }
         }
 
         db.AuditLogs.Add(AuditLogRecord.PaperAction(
@@ -204,7 +211,10 @@ public sealed class PaperBrokerAdapter(
     public async Task<BrokerActionResult> CancelWorkingOrdersAsync(string? symbol, TradingDbContext db)
     {
         var normalizedSymbol = NormalizeSymbol(symbol);
-        var query = db.Orders.Where(order => order.Status == "working");
+        var query = db.Orders
+            .Where(order => order.Status == "working")
+            .Where(order => order.OrderType != SystemManagedProtectionOrders.StopLossOrderType
+                && order.OrderType != SystemManagedProtectionOrders.TakeProfitOrderType);
 
         if (normalizedSymbol is not null)
         {
@@ -213,6 +223,7 @@ public sealed class PaperBrokerAdapter(
 
         var orders = await query.ToListAsync();
         var now = DateTimeOffset.UtcNow;
+        var systemCancelled = await SystemManagedProtectionOrders.CancelAsync(db, normalizedSymbol, now);
 
         foreach (var order in orders)
         {
@@ -223,10 +234,10 @@ public sealed class PaperBrokerAdapter(
         db.AuditLogs.Add(AuditLogRecord.PaperAction(
             "paper.orders_cancelled",
             normalizedSymbol is null
-                ? $"Cancelled {orders.Count} working paper orders"
-                : $"Cancelled {orders.Count} working paper orders for {normalizedSymbol}"));
+                ? $"Cancelled {orders.Count + systemCancelled} working paper/system orders"
+                : $"Cancelled {orders.Count + systemCancelled} working paper/system orders for {normalizedSymbol}"));
 
-        return new BrokerActionResult(orders.Count, 0);
+        return new BrokerActionResult(orders.Count + systemCancelled, 0);
     }
 
     public async Task<BrokerActionResult> ClosePositionAsync(string symbol, TradingDbContext db)
@@ -246,6 +257,9 @@ public sealed class PaperBrokerAdapter(
         var now = DateTimeOffset.UtcNow;
         var closeDirection = position.Direction == "LONG" ? "SHORT" : "LONG";
         var closePrice = position.AveragePrice;
+        var closeStopLoss = position.StopLoss;
+        var closeTakeProfit1 = position.TakeProfit1;
+        var closeTakeProfit2 = position.TakeProfit2;
 
         db.Orders.Add(new OrderRecord
         {
@@ -271,6 +285,9 @@ public sealed class PaperBrokerAdapter(
         });
 
         var cancelled = await CancelWorkingOrdersAsync(normalizedSymbol, db);
+        position.StopLoss = closeStopLoss;
+        position.TakeProfit1 = closeTakeProfit1;
+        position.TakeProfit2 = closeTakeProfit2;
         RecordClosedPosition(db, position, position.Quantity, closePrice, now, "manual_close");
         dailyPerformanceStore.AddRealizedPnl(CalculateRealizedPnl(position, closePrice, position.Quantity));
         db.Positions.Remove(position);
@@ -327,8 +344,26 @@ public sealed class PaperBrokerAdapter(
             return new ProtectionUpdateResult(false, "invalid_protection", validationError, position);
         }
 
-        position.StopLoss = stopLoss ?? position.StopLoss;
-        position.TakeProfit1 = takeProfit ?? position.TakeProfit1;
+        var nextStopLoss = stopLoss ?? position.StopLoss;
+        var nextTakeProfit = takeProfit ?? position.TakeProfit1;
+        if (nextStopLoss is null || nextTakeProfit is null)
+        {
+            return new ProtectionUpdateResult(false, "missing_protection", "Both stop loss and take profit are required", position);
+        }
+
+        if (riskSettingsStore.Get().SystemManagedProtectionEnabled)
+        {
+            var now = DateTimeOffset.UtcNow;
+            await SystemManagedProtectionOrders.ReplaceAsync(db, position, nextStopLoss.Value, nextTakeProfit.Value, now);
+            db.AuditLogs.Add(AuditLogRecord.PaperAction(
+                "system.protection_updated",
+                $"Updated system-managed paper protection for {normalizedSymbol}: SL={position.StopLoss}, TP={position.TakeProfit1}"));
+
+            return new ProtectionUpdateResult(true, "updated", "System-managed protection updated", position);
+        }
+
+        position.StopLoss = nextStopLoss;
+        position.TakeProfit1 = nextTakeProfit;
         position.TakeProfit2 = null;
         position.UpdatedAt = DateTimeOffset.UtcNow;
 

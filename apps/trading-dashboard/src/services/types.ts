@@ -189,6 +189,7 @@ export type RiskSettings = {
   trading_locked: boolean
   emergency_stop_active: boolean
   close_unmanaged_broker_positions: boolean
+  system_managed_protection_enabled: boolean
   stop_loss_failsafe_enabled: boolean
   stop_loss_failsafe_poll_seconds: number
   stop_loss_failsafe_confirm_seconds: number

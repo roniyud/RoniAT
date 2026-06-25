@@ -1,0 +1,99 @@
+flowchart TB
+    subgraph Inputs["Inputs"]
+        WA["WhatsApp Channels"]
+        UI["Dashboard Web/Mobile"]
+        Manual["Manual Trade Form"]
+        ChartTrade["Chart Buy/Sell Market"]
+    end
+
+    subgraph Apps["Apps"]
+        Listener["WhatsApp Listener<br/>Node.js"]
+        Dashboard["Trading Dashboard<br/>Vue PWA"]
+    end
+
+    subgraph Engine["Trading Engine (.NET)"]
+        Auth["Dashboard Auth"]
+        API["HTTP API<br/>/api/*"]
+        SignalHub["SignalR Hub<br/>/hubs/trading"]
+        Risk["Risk Validator"]
+        Router["Broker Router"]
+        MarketData["Market Data Router"]
+        SystemProtection["System Managed Protection<br/>checks every 1s"]
+        Failsafe["Stop Loss Failsafe"]
+        UnmanagedGuard["Unmanaged Position Guard"]
+        Audit["Audit Logger"]
+    end
+
+    subgraph Storage["Local Storage"]
+        SQLite["SQLite<br/>roniat.db"]
+        RiskSettings["risk-settings.json"]
+        BrokerSettings["broker-settings.json"]
+        DailyPerf["daily-performance.json"]
+    end
+
+    subgraph Brokers["Broker Adapters"]
+        Paper["Paper Broker"]
+        IBKR["IBKR Adapter<br/>IB Gateway/TWS"]
+        Tasty["Tastytrade Adapter"]
+    end
+
+    subgraph External["External Services"]
+        IBGateway["IBKR Gateway"]
+        TastyAPI["Tastytrade API"]
+        MarketFeeds["Market Data"]
+    end
+
+    WA --> Listener
+    Listener -->|"POST /api/signals"| API
+
+    UI --> Dashboard
+    Manual --> Dashboard
+    ChartTrade --> Dashboard
+    Dashboard -->|"REST + SignalR"| API
+    Dashboard <-->|"trading.updated"| SignalHub
+
+    API --> Auth
+    API --> Risk
+    Risk --> RiskSettings
+    API --> Router
+    API --> MarketData
+    API --> SQLite
+    API --> Audit
+
+    Router --> Paper
+    Router --> IBKR
+    Router --> Tasty
+
+    IBKR --> IBGateway
+    Tasty --> TastyAPI
+    MarketData --> MarketFeeds
+
+    SystemProtection --> SQLite
+    SystemProtection --> MarketData
+    SystemProtection --> Router
+    SystemProtection --> SignalHub
+
+    Failsafe --> SQLite
+    Failsafe --> MarketData
+    Failsafe --> Router
+
+    UnmanagedGuard --> SQLite
+    UnmanagedGuard --> Router
+
+    Audit --> SQLite
+    API --> BrokerSettings
+    API --> DailyPerf
+
+    classDef input fill:#eef6ff,stroke:#2563eb,color:#0f172a;
+    classDef app fill:#f0fdf4,stroke:#16a34a,color:#0f172a;
+    classDef engine fill:#fff7ed,stroke:#ea580c,color:#0f172a;
+    classDef storage fill:#f8fafc,stroke:#64748b,color:#0f172a;
+    classDef broker fill:#fef2f2,stroke:#dc2626,color:#0f172a;
+    classDef external fill:#faf5ff,stroke:#9333ea,color:#0f172a;
+
+    class WA,UI,Manual,ChartTrade input;
+    class Listener,Dashboard app;
+    class Auth,API,SignalHub,Risk,Router,MarketData,SystemProtection,Failsafe,UnmanagedGuard,Audit engine;
+    class SQLite,RiskSettings,BrokerSettings,DailyPerf storage;
+    class Paper,IBKR,Tasty broker;
+    class IBGateway,TastyAPI,MarketFeeds external;

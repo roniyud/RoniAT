@@ -1,3 +1,4 @@
+using Microsoft.EntityFrameworkCore;
 using RoniAT.TradingEngine.Data;
 using RoniAT.TradingEngine.Models;
 
@@ -5,9 +6,11 @@ namespace RoniAT.TradingEngine.Services;
 
 public sealed class TastytradeBrokerAdapter(
     BrokerSettingsStore settingsStore,
+    RiskSettingsStore riskSettingsStore,
     TastytradeOrderClient orderClient,
     TastytradeAccountClient accountClient,
-    TastytradePendingProtectionService pendingProtectionService) : IBrokerAdapter
+    TastytradePendingProtectionService pendingProtectionService,
+    SystemOwnedPositionTracker systemOwnedPositionTracker) : IBrokerAdapter
 {
     public string Name => "Tastytrade";
 
@@ -94,7 +97,10 @@ public sealed class TastytradeBrokerAdapter(
                 protectionDistance,
                 stopLoss,
                 takeProfit);
-            var shouldAttachProtection = attachProtection && effectiveStopLoss is not null && effectiveTakeProfit is not null;
+            var systemManagedProtection = riskSettingsStore.Get().SystemManagedProtectionEnabled;
+            var shouldAttachProtection = attachProtection && effectiveStopLoss is not null && effectiveTakeProfit is not null && !systemManagedProtection;
+            var shouldCreateSystemProtection = attachProtection && effectiveStopLoss is not null && effectiveTakeProfit is not null && systemManagedProtection;
+            systemOwnedPositionTracker.Mark(Name, normalizedSymbol);
             var submittedOrder = await orderClient.SubmitMarketOrderAsync(
                 normalizedSymbol,
                 normalizedDirection,
@@ -106,7 +112,7 @@ public sealed class TastytradeBrokerAdapter(
                 BrokerOrderId = submittedOrder.OrderId,
                 Symbol = normalizedSymbol,
                 Direction = normalizedDirection,
-                OrderType = shouldAttachProtection ? "tastytrade_market_with_oco" : "tastytrade_market",
+                OrderType = shouldCreateSystemProtection ? "tastytrade_market_system_managed" : shouldAttachProtection ? "tastytrade_market_with_oco" : "tastytrade_market",
                 Quantity = contracts,
                 Price = referencePrice,
                 Status = MapOrderStatus(submittedOrder.Status),
@@ -144,6 +150,24 @@ public sealed class TastytradeBrokerAdapter(
             }
 
             var protectionStatus = "";
+            PositionRecord? localPosition = null;
+            if (shouldCreateSystemProtection)
+            {
+                var positionPrice = referencePrice is > 0 ? referencePrice.Value : 0m;
+                localPosition = await UpsertLocalPositionAsync(normalizedSymbol, normalizedDirection, contracts, positionPrice, db, now);
+                await SystemManagedProtectionOrders.ReplaceAsync(
+                    db,
+                    localPosition,
+                    effectiveStopLoss!.Value,
+                    effectiveTakeProfit!.Value,
+                    now);
+
+                protectionStatus = $" protected by system SL={effectiveStopLoss} TP={effectiveTakeProfit}";
+                db.AuditLogs.Add(AuditLogRecord.BrokerAction(
+                    "system.protection_created",
+                    $"System-managed Tastytrade protection created for {normalizedSymbol}: SL={effectiveStopLoss}, TP={effectiveTakeProfit}, qty={localPosition.Quantity}"));
+            }
+
             if (shouldAttachProtection)
             {
                 var pendingStopLoss = effectiveStopLoss.GetValueOrDefault();
@@ -238,7 +262,7 @@ public sealed class TastytradeBrokerAdapter(
                 MapOrderStatus(submittedOrder.Status),
                 $"Tastytrade Sandbox market order {submittedOrder.OrderId} submitted for {submittedOrder.RoutedSymbol}: {submittedOrder.Message}{protectionStatus}",
                 order,
-                null);
+                localPosition);
         }
         catch (Exception error)
         {
@@ -326,7 +350,7 @@ public sealed class TastytradeBrokerAdapter(
         }
 
         var position = (await accountClient.GetPositionsAsync())
-            .FirstOrDefault(item => item.Symbol.Equals(normalizedSymbol, StringComparison.OrdinalIgnoreCase));
+            .FirstOrDefault(item => IsSamePositionSymbol(item.Symbol, normalizedSymbol));
         if (position is null)
         {
             db.AuditLogs.Add(AuditLogRecord.BrokerAction(
@@ -485,6 +509,78 @@ public sealed class TastytradeBrokerAdapter(
         }
 
         return null;
+    }
+
+    private static async Task<PositionRecord> UpsertLocalPositionAsync(string symbol, string direction, int quantity, decimal averagePrice, TradingDbContext db, DateTimeOffset now)
+    {
+        var existing = await db.Positions.SingleOrDefaultAsync(position => position.Symbol == symbol);
+        if (existing is null)
+        {
+            var created = new PositionRecord
+            {
+                Symbol = symbol,
+                Direction = direction,
+                Quantity = quantity,
+                AveragePrice = averagePrice,
+                IsManaged = true,
+                OpenedAt = now,
+                UpdatedAt = now
+            };
+            db.Positions.Add(created);
+            return created;
+        }
+
+        if (existing.Direction.Equals(direction, StringComparison.OrdinalIgnoreCase))
+        {
+            var totalQuantity = existing.Quantity + quantity;
+            existing.AveragePrice = totalQuantity > 0
+                ? ((existing.AveragePrice * existing.Quantity) + (averagePrice * quantity)) / totalQuantity
+                : averagePrice;
+            existing.Quantity = totalQuantity;
+        }
+        else
+        {
+            existing.Direction = direction;
+            existing.Quantity = quantity;
+            existing.AveragePrice = averagePrice;
+            existing.OpenedAt = now;
+        }
+
+        existing.IsManaged = true;
+        existing.UpdatedAt = now;
+        return existing;
+    }
+
+    private static bool IsSamePositionSymbol(string left, string right)
+    {
+        return ToSymbolKey(left).Equals(ToSymbolKey(right), StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string ToSymbolKey(string symbol)
+    {
+        var normalized = (symbol ?? "").Trim().ToUpperInvariant().TrimStart('/');
+        if (normalized.EndsWith("1!", StringComparison.OrdinalIgnoreCase))
+        {
+            normalized = normalized[..^2];
+        }
+
+        foreach (var root in new[] { "MNQ", "MES", "NQ", "ES" })
+        {
+            if (normalized == root)
+            {
+                return root;
+            }
+
+            if (normalized.StartsWith(root, StringComparison.OrdinalIgnoreCase)
+                && normalized.Length > root.Length + 1
+                && "FGHJKMNQUVXZ".Contains(normalized[root.Length], StringComparison.Ordinal)
+                && char.IsDigit(normalized[^1]))
+            {
+                return root;
+            }
+        }
+
+        return normalized;
     }
 
     private static string JsonNumber(decimal? value)

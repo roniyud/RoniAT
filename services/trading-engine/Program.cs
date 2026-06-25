@@ -139,10 +139,12 @@ builder.Services.Configure<BrokerSettings>(options =>
 });
 builder.Services.AddSingleton<BrokerSettingsStore>();
 builder.Services.AddSingleton<BrokerConnectionStateStore>();
+builder.Services.AddSingleton<SystemOwnedPositionTracker>();
 builder.Services.AddSingleton<IBKRConnectionSession>();
 builder.Services.AddHostedService(serviceProvider => serviceProvider.GetRequiredService<IBKRConnectionSession>());
 builder.Services.AddHostedService<StopLossFailsafeService>();
 builder.Services.AddHostedService<UnmanagedPositionGuardService>();
+builder.Services.AddHostedService<SystemManagedProtectionService>();
 builder.Services.AddHostedService<TastytradeTokenRefreshService>();
 builder.Services.AddScoped<IBKRConnectionTester>();
 builder.Services.AddScoped<TastytradeConnectionTester>();
@@ -704,6 +706,7 @@ app.MapPut("/api/risk/settings", async (RiskSettingsUpdateRequest request, RiskS
         TradingLocked = request.TradingLocked,
         EmergencyStopActive = request.EmergencyStopActive,
         CloseUnmanagedBrokerPositions = request.CloseUnmanagedBrokerPositions,
+        SystemManagedProtectionEnabled = request.SystemManagedProtectionEnabled,
         StopLossFailsafeEnabled = request.StopLossFailsafeEnabled,
         StopLossFailsafePollSeconds = request.StopLossFailsafePollSeconds,
         StopLossFailsafeConfirmSeconds = request.StopLossFailsafeConfirmSeconds,
@@ -1129,10 +1132,27 @@ static async Task<IResult> ProcessMarketOrderAsync(MarketOrderRequest request, T
             Position: null));
     }
 
+    var brokerContracts = validation.Contracts!.Value;
+    if (request.AttachProtection == true)
+    {
+        var existingPosition = await db.Positions
+            .AsNoTracking()
+            .SingleOrDefaultAsync(position => position.Symbol == validation.Symbol);
+
+        if (existingPosition is not null
+            && !existingPosition.Direction.Equals(validation.Direction!, StringComparison.OrdinalIgnoreCase))
+        {
+            brokerContracts += existingPosition.Quantity;
+            db.AuditLogs.Add(AuditLogRecord.BrokerAction(
+                "market_order.reverse_requested",
+                $"Market order for {validation.Symbol} {validation.Direction} {validation.Contracts.Value} will reverse existing {existingPosition.Direction} {existingPosition.Quantity}; broker quantity={brokerContracts}"));
+        }
+    }
+
     var result = await brokerAdapter.PlaceMarketOrderAsync(
         validation.Symbol!,
         validation.Direction!,
-        validation.Contracts!.Value,
+        brokerContracts,
         request.ReferencePrice,
         db,
         request.AttachProtection == true,

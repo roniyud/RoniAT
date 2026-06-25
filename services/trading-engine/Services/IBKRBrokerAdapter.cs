@@ -9,7 +9,8 @@ public sealed class IBKRBrokerAdapter(
     RiskSettingsStore riskSettingsStore,
     DailyPerformanceStore dailyPerformanceStore,
     BrokerConnectionStateStore connectionStateStore,
-    IBKRConnectionSession connectionSession) : IBrokerAdapter
+    IBKRConnectionSession connectionSession,
+    SystemOwnedPositionTracker systemOwnedPositionTracker) : IBrokerAdapter
 {
     public string Name => "IBKR";
 
@@ -152,6 +153,7 @@ public sealed class IBKRBrokerAdapter(
 
         try
         {
+            systemOwnedPositionTracker.Mark(Name, normalizedSymbol);
             var submittedOrder = await connectionSession.PlaceMarketOrderAsync(
                 normalizedSymbol,
                 normalizedDirection,
@@ -211,6 +213,16 @@ public sealed class IBKRBrokerAdapter(
                     var (calculatedStopLoss, calculatedTakeProfit) = CalculateProtectionLevels(normalizedDirection, submittedOrder.AverageFillPrice, distance);
                     var effectiveStopLoss = stopLoss ?? calculatedStopLoss;
                     var effectiveTakeProfit = takeProfit ?? calculatedTakeProfit;
+                    if (riskSettingsStore.Get().SystemManagedProtectionEnabled)
+                    {
+                        await SystemManagedProtectionOrders.ReplaceAsync(db, position, effectiveStopLoss, effectiveTakeProfit, now);
+                        protectionStatus = $" protected by system SL={effectiveStopLoss} TP={effectiveTakeProfit}";
+                        db.AuditLogs.Add(AuditLogRecord.BrokerAction(
+                            "system.protection_created",
+                            $"System-managed protection created for {normalizedSymbol}: SL={effectiveStopLoss}, TP={effectiveTakeProfit}, qty={position.Quantity}"));
+                    }
+                    else
+                    {
                     try
                     {
                         await CancelWorkingOrdersAsync(normalizedSymbol, db);
@@ -262,6 +274,7 @@ public sealed class IBKRBrokerAdapter(
                             $"IBKR market order {submittedOrder.OrderId} filled, but TP/SL were not submitted: {protectionError.Message}",
                             order,
                             position);
+                    }
                     }
                 }
             }
@@ -323,7 +336,10 @@ public sealed class IBKRBrokerAdapter(
     public async Task<BrokerActionResult> CancelWorkingOrdersAsync(string? symbol, TradingDbContext db)
     {
         var normalizedSymbol = string.IsNullOrWhiteSpace(symbol) ? null : symbol.Trim().ToUpperInvariant();
-        var query = db.Orders.Where(order => order.Status == "working");
+        var query = db.Orders
+            .Where(order => order.Status == "working")
+            .Where(order => order.OrderType != SystemManagedProtectionOrders.StopLossOrderType
+                && order.OrderType != SystemManagedProtectionOrders.TakeProfitOrderType);
         if (normalizedSymbol is not null)
         {
             query = query.Where(order => order.Symbol == normalizedSymbol);
@@ -342,6 +358,7 @@ public sealed class IBKRBrokerAdapter(
         }
 
         var now = DateTimeOffset.UtcNow;
+        var systemCancelled = await SystemManagedProtectionOrders.CancelAsync(db, normalizedSymbol, now);
         foreach (var order in orders)
         {
             order.Status = "cancelled";
@@ -351,10 +368,10 @@ public sealed class IBKRBrokerAdapter(
         db.AuditLogs.Add(AuditLogRecord.BrokerAction(
             "ibkr.orders_cancelled",
             normalizedSymbol is null
-                ? $"Cancelled {orders.Count} system-owned IBKR working orders"
-                : $"Cancelled {orders.Count} system-owned IBKR working orders for {normalizedSymbol}"));
+                ? $"Cancelled {orders.Count + systemCancelled} system-owned IBKR/system working orders"
+                : $"Cancelled {orders.Count + systemCancelled} system-owned IBKR/system working orders for {normalizedSymbol}"));
 
-        return new BrokerActionResult(orders.Count, 0);
+        return new BrokerActionResult(orders.Count + systemCancelled, 0);
     }
 
     public async Task<BrokerActionResult> ClosePositionAsync(string symbol, TradingDbContext db)
@@ -373,6 +390,9 @@ public sealed class IBKRBrokerAdapter(
             return new BrokerActionResult(0, 0);
         }
 
+        var closeStopLoss = position.StopLoss;
+        var closeTakeProfit1 = position.TakeProfit1;
+        var closeTakeProfit2 = position.TakeProfit2;
         await CancelWorkingOrdersAsync(normalizedSymbol, db);
         await db.SaveChangesAsync();
         await connectionSession.SyncPositionsAsync();
@@ -388,6 +408,9 @@ public sealed class IBKRBrokerAdapter(
             return new BrokerActionResult(0, 0);
         }
 
+        position.StopLoss = closeStopLoss;
+        position.TakeProfit1 = closeTakeProfit1;
+        position.TakeProfit2 = closeTakeProfit2;
         var closeDirection = position.Direction == "LONG" ? "SHORT" : "LONG";
         var result = await PlaceMarketOrderAsync(
             normalizedSymbol,
@@ -454,6 +477,17 @@ public sealed class IBKRBrokerAdapter(
             return new ProtectionUpdateResult(false, "invalid_protection", validationError, position);
         }
 
+        var now = DateTimeOffset.UtcNow;
+        if (riskSettingsStore.Get().SystemManagedProtectionEnabled)
+        {
+            await SystemManagedProtectionOrders.ReplaceAsync(db, position, nextStopLoss.Value, nextTakeProfit.Value, now);
+            db.AuditLogs.Add(AuditLogRecord.BrokerAction(
+                "system.protection_updated",
+                $"Updated system-managed protection for {normalizedSymbol}: SL={position.StopLoss}, TP={position.TakeProfit1}"));
+
+            return new ProtectionUpdateResult(true, "updated", "System-managed protection updated", position);
+        }
+
         await CancelWorkingOrdersAsync(normalizedSymbol, db);
         var protectiveOrders = await connectionSession.PlaceProtectiveExitOrdersAsync(
             normalizedSymbol,
@@ -462,7 +496,6 @@ public sealed class IBKRBrokerAdapter(
             nextStopLoss.Value,
             nextTakeProfit.Value);
 
-        var now = DateTimeOffset.UtcNow;
         position.StopLoss = nextStopLoss;
         position.TakeProfit1 = nextTakeProfit;
         position.TakeProfit2 = null;

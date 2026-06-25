@@ -11,6 +11,7 @@ public sealed class UnmanagedPositionGuardService(
     RiskSettingsStore riskSettingsStore,
     BrokerSettingsStore brokerSettingsStore,
     IBKRConnectionSession ibkrConnectionSession,
+    SystemOwnedPositionTracker systemOwnedPositionTracker,
     IHubContext<TradingHub> hub,
     ILogger<UnmanagedPositionGuardService> logger) : BackgroundService
 {
@@ -92,7 +93,9 @@ public sealed class UnmanagedPositionGuardService(
         foreach (var position in brokerPositions.Where(position =>
         {
             var key = ToOwnershipKey(position.Symbol);
-            return protectedKeys.Contains(key) && !managedKeys.Contains(key);
+            return protectedKeys.Contains(key)
+                && !managedKeys.Contains(key)
+                && !systemOwnedPositionTracker.IsRecentlyOwned("IBKR", position.Symbol);
         }))
         {
             var cooldownKey = $"IBKR:{ToOwnershipKey(position.Symbol)}";
@@ -167,7 +170,9 @@ public sealed class UnmanagedPositionGuardService(
         foreach (var position in brokerPositions.Where(position =>
         {
             var key = ToOwnershipKey(position.Symbol);
-            return protectedKeys.Contains(key) && !managedKeys.Contains(key);
+            return protectedKeys.Contains(key)
+                && !managedKeys.Contains(key)
+                && !systemOwnedPositionTracker.IsRecentlyOwned("Tastytrade", position.Symbol);
         }))
         {
             var cooldownKey = $"TASTYTRADE:{ToOwnershipKey(position.Symbol)}";
