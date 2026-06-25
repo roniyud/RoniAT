@@ -1022,29 +1022,59 @@ static async Task EnsureClosedPositionsTableAsync(TradingDbContext db)
 
 static async Task EnsurePositionOwnershipColumnAsync(TradingDbContext db)
 {
-    try
+    if (!await SqliteColumnExistsAsync(db, "positions", "IsManaged"))
     {
         await db.Database.ExecuteSqlRawAsync("""
             ALTER TABLE "positions"
             ADD COLUMN "IsManaged" INTEGER NOT NULL DEFAULT 0;
             """);
-
-        await db.Database.ExecuteSqlRawAsync("""
-            UPDATE "positions"
-            SET "IsManaged" = 1
-            WHERE "Symbol" IN (
-                SELECT DISTINCT "Symbol"
-                FROM "orders"
-                WHERE "Status" NOT IN ('rejected', 'cancelled')
-                  AND "OrderType" NOT LIKE '%close%'
-                  AND "OrderType" NOT LIKE '%flatten%'
-                  AND "OrderType" NOT LIKE '%unmanaged%'
-            );
-            """);
     }
-    catch (SqliteException error) when (error.SqliteErrorCode == 1 && error.Message.Contains("duplicate column name", StringComparison.OrdinalIgnoreCase))
+
+    await db.Database.ExecuteSqlRawAsync("""
+        UPDATE "positions"
+        SET "IsManaged" = 1
+        WHERE "Symbol" IN (
+            SELECT DISTINCT "Symbol"
+            FROM "orders"
+            WHERE "Status" NOT IN ('rejected', 'cancelled')
+              AND "OrderType" NOT LIKE '%close%'
+              AND "OrderType" NOT LIKE '%flatten%'
+              AND "OrderType" NOT LIKE '%unmanaged%'
+        );
+        """);
+}
+
+static async Task<bool> SqliteColumnExistsAsync(TradingDbContext db, string tableName, string columnName)
+{
+    var connection = db.Database.GetDbConnection();
+    var shouldClose = connection.State == System.Data.ConnectionState.Closed;
+    if (shouldClose)
     {
-        // Existing local databases already have the column.
+        await connection.OpenAsync();
+    }
+
+    try
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = $"""PRAGMA table_info("{tableName.Replace("\"", "\"\"", StringComparison.Ordinal)}");""";
+
+        await using var reader = await command.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            if (string.Equals(reader["name"]?.ToString(), columnName, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+    finally
+    {
+        if (shouldClose)
+        {
+            await connection.CloseAsync();
+        }
     }
 }
 
