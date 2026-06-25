@@ -36,6 +36,7 @@ import {
   login,
   lockTrading,
   logout,
+  onAuthExpired,
   refreshTastytradeAccessToken,
   resumeTrading,
   submitMarketOrder,
@@ -96,6 +97,7 @@ let refreshTimer: number | undefined
 let chartRefreshTimer: number | undefined
 let isChartRefreshInFlight = false
 let realtimeClient: ReturnType<typeof createTradingRealtimeClient> | undefined
+let removeAuthExpiredListener: (() => void) | undefined
 
 const totalOpenQuantity = computed(() => positions.value.reduce((total, position) => total + Math.abs(position.quantity), 0))
 const workingOrders = computed(() => orders.value.filter((order) => order.status === 'working'))
@@ -219,6 +221,7 @@ const activeChartTrade = computed(() => {
     stopLoss: position.stopLoss,
     takeProfit1: position.takeProfit1,
     takeProfit2: position.takeProfit2,
+    isManaged: position.isManaged,
     workingOrders: positionOrders.length,
     updatedAt: position.updatedAt,
   }
@@ -248,6 +251,31 @@ const canSubmitChartTrade = computed(() => !chartTradeBlockedReason.value && !is
 
 function normalizeSymbol(symbol?: string | null) {
   return symbol?.trim().toUpperCase() ?? ''
+}
+
+function normalizeMarketDataSymbol(symbol?: string | null) {
+  let normalized = normalizeSymbol(symbol)
+    .replace(/^.*:/, '')
+    .replace(/^\//, '')
+    .replace(/\s+/g, '')
+
+  if (normalized.endsWith('1!')) {
+    normalized = normalized.slice(0, -2)
+  }
+
+  for (const root of ['MNQ', 'MES', 'NQ', 'ES']) {
+    if (normalized === root) return root
+    if (
+      normalized.startsWith(root)
+      && normalized.length > root.length + 1
+      && 'FGHJKMNQUVXZ'.includes(normalized[root.length])
+      && /\d$/.test(normalized)
+    ) {
+      return root
+    }
+  }
+
+  return normalized
 }
 
 function isProtectionOrder(orderType: string) {
@@ -350,9 +378,15 @@ async function refreshCandles(showLoading = true) {
       ? `Simulated fallback candles. Market data failed: ${result.warning || 'historical data unavailable'}`
       : ''
   } catch (error) {
-    chartCandles.value = []
-    chartMarketDataWarning.value = ''
-    chartError.value = error instanceof Error ? error.message : 'Market data unavailable'
+    const message = error instanceof Error ? error.message : 'Market data unavailable'
+    if (chartCandles.value.length === 0) {
+      chartCandles.value = []
+      chartMarketDataWarning.value = ''
+      chartError.value = message
+    } else {
+      chartMarketDataWarning.value = `Market data refresh failed: ${message}`
+      chartError.value = ''
+    }
   } finally {
     isChartRefreshInFlight = false
     if (showLoading) {
@@ -381,7 +415,11 @@ function getTimeframeSeconds(timeframe: Timeframe) {
 }
 
 function applyMarketTick(tick: MarketTick) {
-  if (normalizeSymbol(tick.symbol) !== chartSymbol.value || !Number.isFinite(tick.price) || tick.price <= 0) {
+  if (
+    normalizeMarketDataSymbol(tick.symbol) !== normalizeMarketDataSymbol(chartSymbol.value)
+    || !Number.isFinite(tick.price)
+    || tick.price <= 0
+  ) {
     return
   }
 
@@ -914,6 +952,15 @@ async function handleLogout() {
   realtimeStatus.value = 'disconnected'
 }
 
+function handleAuthExpired() {
+  stopDashboard()
+  isAuthenticated.value = false
+  apiState.value = 'offline'
+  realtimeStatus.value = 'disconnected'
+  loginMessage.value = 'Login expired. Please sign in again.'
+  errorMessage.value = ''
+}
+
 function startDashboard() {
   stopDashboard()
   refreshData()
@@ -954,6 +1001,8 @@ function stopDashboard() {
 }
 
 onMounted(() => {
+  removeAuthExpiredListener = onAuthExpired(handleAuthExpired)
+
   if (isAuthenticated.value) {
     startDashboard()
   } else {
@@ -962,6 +1011,8 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  removeAuthExpiredListener?.()
+  removeAuthExpiredListener = undefined
   stopDashboard()
 })
 
@@ -1410,7 +1461,12 @@ watch(closedPositionsDate, () => {
         <div v-if="positionsView === 'open' && positions.length !== 0" class="position-list">
           <article v-for="position in positions" :key="position.id" class="position-row">
             <div>
-              <strong>{{ position.symbol }}</strong>
+              <strong>
+                {{ position.symbol }}
+                <span class="ownership-badge" :class="position.isManaged ? 'managed' : 'unmanaged'">
+                  {{ position.isManaged ? 'Managed' : 'Unmanaged' }}
+                </span>
+              </strong>
               <span>{{ position.direction }} / open qty {{ position.quantity }}</span>
               <span>{{ position.direction }} · {{ position.quantity }}</span>
             </div>
@@ -2018,6 +2074,14 @@ watch(closedPositionsDate, () => {
               <small>{{ riskForm.emergency_stop_active ? 'Active' : 'Inactive' }}</small>
             </span>
             <input v-model="riskForm.emergency_stop_active" type="checkbox" />
+          </label>
+
+          <label class="toggle-row danger-toggle">
+            <span>
+              <strong>Close Unmanaged Broker Positions</strong>
+              <small>{{ riskForm.close_unmanaged_broker_positions ? 'Immediately closes broker positions not owned by this system' : 'Manual broker positions are only displayed' }}</small>
+            </span>
+            <input v-model="riskForm.close_unmanaged_broker_positions" type="checkbox" />
           </label>
 
           <div class="settings-section-title">

@@ -1,5 +1,5 @@
 import type { CandlestickData, Time } from 'lightweight-charts'
-import { getAuthToken } from './api'
+import { getAuthToken, throwApiError } from './api'
 
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/+$/, '')
 
@@ -49,6 +49,10 @@ export async function getCandles(symbol: string, timeframe: Timeframe): Promise<
   }
 
   if (!response.ok) {
+    if (response.status === 401) {
+      await throwApiError(response, 'market data API')
+    }
+
     throw new Error(await readMarketDataError(response))
   }
 
@@ -87,7 +91,7 @@ export async function startMarketDataStream(symbol: string): Promise<void> {
     })
 
     if (!response.ok) {
-      throw new Error(`HTTP ${response.status} from market data stream API`)
+      await throwApiError(response, 'market data stream API')
     }
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') {

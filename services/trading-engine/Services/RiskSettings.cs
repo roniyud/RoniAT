@@ -16,6 +16,7 @@ public sealed class RiskSettings
     public bool AllowPositionStacking { get; set; } = false;
     public bool TradingLocked { get; set; } = false;
     public bool EmergencyStopActive { get; set; } = false;
+    public bool CloseUnmanagedBrokerPositions { get; set; } = false;
     public bool StopLossFailsafeEnabled { get; set; } = true;
     public int StopLossFailsafePollSeconds { get; set; } = 1;
     public int StopLossFailsafeConfirmSeconds { get; set; } = 2;

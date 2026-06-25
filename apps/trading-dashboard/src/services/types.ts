@@ -79,6 +79,7 @@ export type PositionRecord = {
   stopLoss?: number | null
   takeProfit1?: number | null
   takeProfit2?: number | null
+  isManaged: boolean
   openedAt?: string | null
   updatedAt?: string | null
 }
@@ -187,6 +188,7 @@ export type RiskSettings = {
   allow_position_stacking: boolean
   trading_locked: boolean
   emergency_stop_active: boolean
+  close_unmanaged_broker_positions: boolean
   stop_loss_failsafe_enabled: boolean
   stop_loss_failsafe_poll_seconds: number
   stop_loss_failsafe_confirm_seconds: number

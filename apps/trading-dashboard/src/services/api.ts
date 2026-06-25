@@ -2,6 +2,7 @@ import type { AuditLogRecord, BrokerConnectionTestResult, BrokerMode, BrokerSett
 
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/+$/, '')
 const AUTH_TOKEN_KEY = 'roniat.auth.token'
+export const AUTH_EXPIRED_EVENT = 'roniat.auth.expired'
 
 export function getAuthToken() {
   return window.localStorage.getItem(AUTH_TOKEN_KEY)
@@ -9,6 +10,29 @@ export function getAuthToken() {
 
 export function isAuthenticated() {
   return Boolean(getAuthToken())
+}
+
+export function clearAuthToken() {
+  window.localStorage.removeItem(AUTH_TOKEN_KEY)
+}
+
+export function notifyAuthExpired() {
+  clearAuthToken()
+  window.dispatchEvent(new Event(AUTH_EXPIRED_EVENT))
+}
+
+export function onAuthExpired(handler: () => void) {
+  window.addEventListener(AUTH_EXPIRED_EVENT, handler)
+  return () => window.removeEventListener(AUTH_EXPIRED_EVENT, handler)
+}
+
+export async function throwApiError(response: Response, source = 'Trading Engine'): Promise<never> {
+  if (response.status === 401) {
+    notifyAuthExpired()
+    throw new Error('Login expired. Please sign in again.')
+  }
+
+  throw new Error(`HTTP ${response.status} from ${source}`)
 }
 
 export async function login(username: string, password: string) {
@@ -36,7 +60,7 @@ export async function login(username: string, password: string) {
 
 export async function logout() {
   const token = getAuthToken()
-  window.localStorage.removeItem(AUTH_TOKEN_KEY)
+  clearAuthToken()
 
   if (!token) return
 
@@ -101,7 +125,7 @@ export async function updateBrokerSettings(settings: BrokerSettings) {
   })
 
   if (!response.ok) {
-    throw new Error(`HTTP ${response.status} from Trading Engine`)
+    await throwApiError(response)
   }
 
   return response.json() as Promise<BrokerSettings>
@@ -119,7 +143,7 @@ export async function testBrokerConnection() {
   })
 
   if (!response.ok) {
-    throw new Error(`HTTP ${response.status} from Trading Engine`)
+    await throwApiError(response)
   }
 
   return response.json() as Promise<BrokerConnectionTestResult>
@@ -137,7 +161,7 @@ export async function startTastytradeOAuth() {
   })
 
   if (!response.ok) {
-    throw new Error(`HTTP ${response.status} from Trading Engine`)
+    await throwApiError(response)
   }
 
   return response.json() as Promise<{ authorization_url: string; environment: string; redirect_uri: string }>
@@ -155,7 +179,7 @@ export async function refreshTastytradeAccessToken() {
   })
 
   if (!response.ok) {
-    throw new Error(`HTTP ${response.status} from Trading Engine`)
+    await throwApiError(response)
   }
 
   return response.json() as Promise<{ ok: boolean; message: string; environment: string; access_token_expires_at?: string | null }>
@@ -177,7 +201,7 @@ export async function updateRiskSettings(settings: RiskSettings) {
   })
 
   if (!response.ok) {
-    throw new Error(`HTTP ${response.status} from Trading Engine`)
+    await throwApiError(response)
   }
 
   return response.json() as Promise<RiskSettings>
@@ -195,7 +219,7 @@ export async function submitManualTrade(trade: TradingSignalRequest) {
   })
 
   if (!response.ok) {
-    throw new Error(`HTTP ${response.status} from Trading Engine`)
+    await throwApiError(response)
   }
 
   return response.json() as Promise<TradingSignal>
@@ -213,7 +237,7 @@ export async function submitMarketOrder(order: MarketOrderRequest) {
   })
 
   if (!response.ok) {
-    throw new Error(`HTTP ${response.status} from Trading Engine`)
+    await throwApiError(response)
   }
 
   const payload = await response.json() as Record<string, unknown>
@@ -242,7 +266,7 @@ export async function emergencyStop() {
   })
 
   if (!response.ok) {
-    throw new Error(`HTTP ${response.status} from Trading Engine`)
+    await throwApiError(response)
   }
 
   const payload = await response.json() as { settings: RiskSettings; broker_result?: Record<string, unknown> }
@@ -277,7 +301,7 @@ export async function updateProtection(update: ProtectionUpdateRequest) {
   })
 
   if (!response.ok) {
-    throw new Error(`HTTP ${response.status} from Trading Engine`)
+    await throwApiError(response)
   }
 
   const payload = await response.json() as Record<string, unknown>
@@ -298,7 +322,7 @@ async function request<T>(path: string): Promise<T> {
   })
 
   if (!response.ok) {
-    throw new Error(`HTTP ${response.status} from Trading Engine`)
+    await throwApiError(response)
   }
 
   return response.json() as Promise<T>
@@ -316,7 +340,7 @@ async function postSafetyAction(path: string): Promise<RiskSettings> {
   })
 
   if (!response.ok) {
-    throw new Error(`HTTP ${response.status} from Trading Engine`)
+    await throwApiError(response)
   }
 
   return response.json() as Promise<RiskSettings>
@@ -334,7 +358,7 @@ async function postBrokerAction(path: string, body: Record<string, unknown>): Pr
   })
 
   if (!response.ok) {
-    throw new Error(`HTTP ${response.status} from Trading Engine`)
+    await throwApiError(response)
   }
 
   const payload = await response.json() as Record<string, unknown>
@@ -381,6 +405,7 @@ function mapPosition(record: Record<string, unknown>): PositionRecord {
     stopLoss: readOptionalNumber(record, 'stopLoss', 'StopLoss'),
     takeProfit1: readOptionalNumber(record, 'takeProfit1', 'TakeProfit1'),
     takeProfit2: readOptionalNumber(record, 'takeProfit2', 'TakeProfit2'),
+    isManaged: Boolean(record.isManaged ?? record.is_managed ?? record.IsManaged),
     openedAt: readOptionalString(record, 'openedAt', 'OpenedAt'),
     updatedAt: readOptionalString(record, 'updatedAt', 'UpdatedAt'),
   }

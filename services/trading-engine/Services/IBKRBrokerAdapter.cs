@@ -544,6 +544,7 @@ public sealed class IBKRBrokerAdapter(
                 StopLoss = signal.StopLoss,
                 TakeProfit1 = signal.TakeProfit1,
                 TakeProfit2 = ignoreTakeProfit2 ? null : signal.TakeProfit2,
+                IsManaged = true,
                 OpenedAt = now,
                 UpdatedAt = now
             });
@@ -567,6 +568,7 @@ public sealed class IBKRBrokerAdapter(
         existing.StopLoss = signal.StopLoss;
         existing.TakeProfit1 = signal.TakeProfit1;
         existing.TakeProfit2 = ignoreTakeProfit2 ? null : signal.TakeProfit2;
+        existing.IsManaged = true;
         existing.UpdatedAt = now;
     }
 
@@ -581,6 +583,7 @@ public sealed class IBKRBrokerAdapter(
                 Direction = direction,
                 Quantity = contracts,
                 AveragePrice = fillPrice,
+                IsManaged = true,
                 OpenedAt = now,
                 UpdatedAt = now
             };
@@ -618,12 +621,14 @@ public sealed class IBKRBrokerAdapter(
             existing.Quantity = contracts - existing.Quantity;
             existing.Direction = direction;
             existing.AveragePrice = fillPrice;
+            existing.IsManaged = true;
             existing.OpenedAt = now;
         }
 
         existing.StopLoss = null;
         existing.TakeProfit1 = null;
         existing.TakeProfit2 = null;
+        existing.IsManaged = true;
         existing.UpdatedAt = now;
         return existing;
     }

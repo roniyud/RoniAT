@@ -17,6 +17,7 @@ public sealed record RiskSettingsUpdateRequest(
     [property: JsonPropertyName("allow_position_stacking")] bool AllowPositionStacking,
     [property: JsonPropertyName("trading_locked")] bool TradingLocked,
     [property: JsonPropertyName("emergency_stop_active")] bool EmergencyStopActive,
+    [property: JsonPropertyName("close_unmanaged_broker_positions")] bool CloseUnmanagedBrokerPositions,
     [property: JsonPropertyName("stop_loss_failsafe_enabled")] bool StopLossFailsafeEnabled,
     [property: JsonPropertyName("stop_loss_failsafe_poll_seconds")] int StopLossFailsafePollSeconds,
     [property: JsonPropertyName("stop_loss_failsafe_confirm_seconds")] int StopLossFailsafeConfirmSeconds,

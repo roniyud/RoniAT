@@ -33,6 +33,7 @@ type ActiveTrade = {
   stopLoss?: number | null
   takeProfit1?: number | null
   takeProfit2?: number | null
+  isManaged: boolean
   workingOrders: number
   updatedAt?: string | null
 }
@@ -409,6 +410,9 @@ onUnmounted(() => {
         <span>Active Position</span>
         <strong v-if="activeTrade">
           {{ activeTrade.direction }} {{ activeTrade.quantity }} {{ activeTrade.symbol }}
+          <span class="ownership-badge" :class="activeTrade.isManaged ? 'managed' : 'unmanaged'">
+            {{ activeTrade.isManaged ? 'Managed' : 'Unmanaged' }}
+          </span>
         </strong>
         <strong v-else>No active position for {{ formattedSymbol }}</strong>
       </div>
@@ -560,7 +564,7 @@ onUnmounted(() => {
         {{ marketDataWarning }}
       </div>
       <div v-if="isLoading" class="chart-overlay">Loading candles</div>
-      <div v-else-if="errorMessage" class="chart-overlay error">{{ errorMessage }}</div>
+      <div v-else-if="errorMessage && candles.length === 0" class="chart-overlay error">{{ errorMessage }}</div>
       <div v-else-if="candles.length === 0" class="chart-overlay">No candles</div>
     </div>
 

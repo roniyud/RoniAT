@@ -232,6 +232,53 @@ public sealed class IBKRConnectionSession(
         }
     }
 
+    public async Task<IReadOnlyList<PositionRecord>> GetAccountPositionsSnapshotAsync(CancellationToken cancellationToken = default)
+    {
+        await connectionLock.WaitAsync(cancellationToken);
+
+        try
+        {
+            var result = await EnsureConnectedLockedAsync(cancellationToken);
+            if (!result.HandshakeOk || client?.IsConnected() != true || wrapper is null)
+            {
+                throw new InvalidOperationException(result.Message);
+            }
+
+            wrapper.ResetPositions();
+            client.reqPositions();
+            var positions = await wrapper.WaitForPositionsAsync(PositionsTimeout, cancellationToken);
+            client.cancelPositions();
+
+            if (positions is null)
+            {
+                logger.LogWarning("IBKR unmanaged position guard timed out before positionEnd");
+                return [];
+            }
+
+            return positions
+                .Select(position =>
+                {
+                    var quantity = (int)Math.Abs(decimal.ToInt32(decimal.Round(position.Quantity, 0, MidpointRounding.AwayFromZero)));
+                    return new PositionRecord
+                    {
+                        Symbol = position.Symbol,
+                        Direction = position.Quantity > 0 ? "LONG" : "SHORT",
+                        Quantity = quantity,
+                        AveragePrice = position.AveragePrice,
+                        IsManaged = false,
+                        OpenedAt = DateTimeOffset.UtcNow,
+                        UpdatedAt = DateTimeOffset.UtcNow
+                    };
+                })
+                .Where(position => position.Quantity > 0)
+                .ToArray();
+        }
+        finally
+        {
+            connectionLock.Release();
+        }
+    }
+
     public async Task<IReadOnlyList<CandleResponse>> GetHistoricalCandlesAsync(
         string symbol,
         string timeframe,
@@ -880,6 +927,7 @@ public sealed class IBKRConnectionSession(
                     StopLoss = protection.StopLoss,
                     TakeProfit1 = protection.TakeProfit,
                     TakeProfit2 = null,
+                    IsManaged = false,
                     OpenedAt = now,
                     UpdatedAt = now
                 });

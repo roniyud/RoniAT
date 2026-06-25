@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.FileProviders;
+using Microsoft.Data.Sqlite;
 using RoniAT.TradingEngine.Contracts;
 using RoniAT.TradingEngine.Data;
 using RoniAT.TradingEngine.Hubs;
@@ -141,6 +142,7 @@ builder.Services.AddSingleton<BrokerConnectionStateStore>();
 builder.Services.AddSingleton<IBKRConnectionSession>();
 builder.Services.AddHostedService(serviceProvider => serviceProvider.GetRequiredService<IBKRConnectionSession>());
 builder.Services.AddHostedService<StopLossFailsafeService>();
+builder.Services.AddHostedService<UnmanagedPositionGuardService>();
 builder.Services.AddHostedService<TastytradeTokenRefreshService>();
 builder.Services.AddScoped<IBKRConnectionTester>();
 builder.Services.AddScoped<TastytradeConnectionTester>();
@@ -181,6 +183,7 @@ using (var scope = app.Services.CreateScope())
     var db = scope.ServiceProvider.GetRequiredService<TradingDbContext>();
     await db.Database.EnsureCreatedAsync();
     await EnsureClosedPositionsTableAsync(db);
+    await EnsurePositionOwnershipColumnAsync(db);
     await db.Database.ExecuteSqlRawAsync("PRAGMA journal_mode=WAL;");
 }
 
@@ -334,7 +337,11 @@ app.MapGet("/api/positions", async (TradingDbContext db, BrokerSettingsStore bro
     {
         try
         {
-            return Results.Ok(await tastytradeClient.GetPositionsAsync(cancellationToken));
+            var managedKeys = await GetManagedPositionKeysAsync(db, cancellationToken);
+            var tastytradePositions = await tastytradeClient.GetPositionsAsync(cancellationToken);
+            return Results.Ok(tastytradePositions
+                .Select(position => PositionResponse.FromRecord(position, managedKeys.Contains(ToOwnershipKey(position.Symbol))))
+                .ToArray());
         }
         catch (InvalidOperationException error)
         {
@@ -346,7 +353,7 @@ app.MapGet("/api/positions", async (TradingDbContext db, BrokerSettingsStore bro
         .OrderBy(position => position.Symbol)
         .ToListAsync();
 
-    return Results.Ok(positions);
+    return Results.Ok(positions.Select(position => PositionResponse.FromRecord(position)).ToArray());
 })
 .WithName("GetPositions")
 .WithOpenApi();
@@ -696,6 +703,7 @@ app.MapPut("/api/risk/settings", async (RiskSettingsUpdateRequest request, RiskS
         AllowPositionStacking = request.AllowPositionStacking,
         TradingLocked = request.TradingLocked,
         EmergencyStopActive = request.EmergencyStopActive,
+        CloseUnmanagedBrokerPositions = request.CloseUnmanagedBrokerPositions,
         StopLossFailsafeEnabled = request.StopLossFailsafeEnabled,
         StopLossFailsafePollSeconds = request.StopLossFailsafePollSeconds,
         StopLossFailsafeConfirmSeconds = request.StopLossFailsafeConfirmSeconds,
@@ -1007,6 +1015,95 @@ static async Task EnsureClosedPositionsTableAsync(TradingDbContext db)
         CREATE INDEX IF NOT EXISTS "IX_closed_positions_Symbol"
         ON "closed_positions" ("Symbol");
         """);
+}
+
+static async Task EnsurePositionOwnershipColumnAsync(TradingDbContext db)
+{
+    try
+    {
+        await db.Database.ExecuteSqlRawAsync("""
+            ALTER TABLE "positions"
+            ADD COLUMN "IsManaged" INTEGER NOT NULL DEFAULT 0;
+            """);
+
+        await db.Database.ExecuteSqlRawAsync("""
+            UPDATE "positions"
+            SET "IsManaged" = 1
+            WHERE "Symbol" IN (
+                SELECT DISTINCT "Symbol"
+                FROM "orders"
+                WHERE "Status" NOT IN ('rejected', 'cancelled')
+                  AND "OrderType" NOT LIKE '%close%'
+                  AND "OrderType" NOT LIKE '%flatten%'
+                  AND "OrderType" NOT LIKE '%unmanaged%'
+            );
+            """);
+    }
+    catch (SqliteException error) when (error.SqliteErrorCode == 1 && error.Message.Contains("duplicate column name", StringComparison.OrdinalIgnoreCase))
+    {
+        // Existing local databases already have the column.
+    }
+}
+
+static async Task<HashSet<string>> GetManagedPositionKeysAsync(TradingDbContext db, CancellationToken cancellationToken)
+{
+    var managedPositionSymbols = await db.Positions
+        .AsNoTracking()
+        .Where(position => position.IsManaged)
+        .Select(position => position.Symbol)
+        .ToListAsync(cancellationToken);
+
+    var managedOrderSymbols = await db.Orders
+        .AsNoTracking()
+        .Where(order => order.Status != "rejected" && order.Status != "cancelled")
+        .Where(order => !order.OrderType.Contains("close") && !order.OrderType.Contains("flatten") && !order.OrderType.Contains("unmanaged"))
+        .Select(order => order.Symbol)
+        .Distinct()
+        .ToListAsync(cancellationToken);
+
+    return managedPositionSymbols
+        .Concat(managedOrderSymbols)
+        .Select(ToOwnershipKey)
+        .Where(key => !string.IsNullOrWhiteSpace(key))
+        .ToHashSet(StringComparer.OrdinalIgnoreCase);
+}
+
+static string ToOwnershipKey(string symbol)
+{
+    var normalized = (symbol ?? "").Trim().ToUpperInvariant();
+    if (string.IsNullOrWhiteSpace(normalized))
+    {
+        return "";
+    }
+
+    if (normalized.Contains(':'))
+    {
+        normalized = normalized[(normalized.LastIndexOf(':') + 1)..];
+    }
+
+    normalized = normalized.TrimStart('/').Replace(" ", "", StringComparison.Ordinal);
+    if (normalized.EndsWith("1!", StringComparison.OrdinalIgnoreCase))
+    {
+        normalized = normalized[..^2];
+    }
+
+    foreach (var root in new[] { "MNQ", "MES", "NQ", "ES" })
+    {
+        if (normalized.Equals(root, StringComparison.OrdinalIgnoreCase))
+        {
+            return root;
+        }
+
+        if (normalized.StartsWith(root, StringComparison.OrdinalIgnoreCase)
+            && normalized.Length > root.Length + 1
+            && "FGHJKMNQUVXZ".Contains(normalized[root.Length], StringComparison.Ordinal)
+            && char.IsDigit(normalized[^1]))
+        {
+            return root;
+        }
+    }
+
+    return normalized;
 }
 
 static DateOnly? ParseDateOnly(string? value)

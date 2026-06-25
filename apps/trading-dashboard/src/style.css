@@ -475,10 +475,37 @@ h3 {
 }
 
 .active-trade-main strong {
-  display: block;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
   margin-top: 4px;
   color: #102321;
   font-size: 18px;
+}
+
+.ownership-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 20px;
+  border: 1px solid;
+  border-radius: 999px;
+  padding: 0 8px;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.ownership-badge.managed {
+  border-color: #bbf7d0;
+  color: #13795b;
+  background: #f0fdf4;
+}
+
+.ownership-badge.unmanaged {
+  border-color: #fed7aa;
+  color: #b45309;
+  background: #fff7ed;
 }
 
 .active-trade-grid {
@@ -1054,6 +1081,13 @@ tr:last-child td {
   margin-top: 4px;
   color: #181a1b;
   font-size: 14px;
+}
+
+.position-row > div:first-child strong {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .position-row > div:first-child span + span {

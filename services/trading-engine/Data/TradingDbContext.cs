@@ -52,6 +52,7 @@ public sealed class TradingDbContext(DbContextOptions<TradingDbContext> options)
             entity.HasKey(position => position.Id);
             entity.Property(position => position.Symbol).HasMaxLength(32).IsRequired();
             entity.Property(position => position.Direction).HasMaxLength(8).IsRequired();
+            entity.Property(position => position.IsManaged).HasDefaultValue(false);
             entity.HasIndex(position => position.Symbol).IsUnique();
         });
 

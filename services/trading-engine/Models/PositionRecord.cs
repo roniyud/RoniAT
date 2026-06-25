@@ -10,6 +10,7 @@ public sealed class PositionRecord
     public decimal? StopLoss { get; set; }
     public decimal? TakeProfit1 { get; set; }
     public decimal? TakeProfit2 { get; set; }
+    public bool IsManaged { get; set; }
     public DateTimeOffset OpenedAt { get; set; } = DateTimeOffset.UtcNow;
     public DateTimeOffset? UpdatedAt { get; set; }
 }
