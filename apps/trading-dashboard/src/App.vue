@@ -427,10 +427,6 @@ async function ensureChartTickStream() {
   }
 }
 
-function getChartRefreshIntervalMs(timeframe: Timeframe) {
-  return timeframe === '1h' ? 30000 : 5000
-}
-
 function getTimeframeSeconds(timeframe: Timeframe) {
   if (timeframe === '1m') return 60
   if (timeframe === '5m') return 300
@@ -488,13 +484,8 @@ function applyMarketTick(tick: MarketTick) {
 function restartChartRefreshTimer() {
   if (chartRefreshTimer) {
     window.clearInterval(chartRefreshTimer)
+    chartRefreshTimer = undefined
   }
-
-  chartRefreshTimer = window.setInterval(() => {
-    if (activeTab.value === 'chart') {
-      refreshCandles(false)
-    }
-  }, getChartRefreshIntervalMs(selectedTimeframe.value))
 }
 
 async function runAction(actionKey: string, confirmation: string, action: () => Promise<unknown>, requireConfirmation = true) {
@@ -1025,9 +1016,6 @@ function startDashboard() {
     (update) => {
       lastRealtimeEvent.value = update
       refreshData()
-      if (activeTab.value === 'chart') {
-        refreshCandles(false)
-      }
     },
     (status) => {
       realtimeStatus.value = status
