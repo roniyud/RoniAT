@@ -1,3 +1,5 @@
+using System.Net.Http.Headers;
+using System.Text;
 using System.Text.Json;
 
 namespace RoniAT.TradingEngine.Services;
@@ -64,24 +66,28 @@ public sealed class TastytradeOAuthService(
 
         try
         {
-            using var content = new FormUrlEncodedContent(new Dictionary<string, string>
-            {
-                ["grant_type"] = "authorization_code",
-                ["code"] = code,
-                ["redirect_uri"] = settings.RedirectUri,
-                ["client_id"] = settings.ClientId,
-                ["client_secret"] = settings.ClientSecret
-            });
-
-            using var request = new HttpRequestMessage(HttpMethod.Post, settings.TokenUrl)
-            {
-                Content = content
-            };
-            request.Headers.TryAddWithoutValidation("Accept-Version", "20240501");
-
             var client = httpClientFactory.CreateClient("tastytrade");
-            using var response = await client.SendAsync(request, cancellationToken);
-            var body = await response.Content.ReadAsStringAsync(cancellationToken);
+            var (response, body) = await SendTokenRequestAsync(
+                client,
+                settings.TokenUrl,
+                settings.ClientId,
+                settings.ClientSecret,
+                new Dictionary<string, string>
+                {
+                    ["grant_type"] = "authorization_code",
+                    ["code"] = code,
+                    ["redirect_uri"] = settings.RedirectUri,
+                    ["client_id"] = settings.ClientId,
+                    ["client_secret"] = settings.ClientSecret
+                },
+                new Dictionary<string, string>
+                {
+                    ["grant_type"] = "authorization_code",
+                    ["code"] = code,
+                    ["redirect_uri"] = settings.RedirectUri
+                },
+                cancellationToken);
+
             if (!response.IsSuccessStatusCode)
             {
                 return new TastytradeOAuthCallbackResult(
@@ -133,22 +139,26 @@ public sealed class TastytradeOAuthService(
 
         try
         {
-            using var content = new FormUrlEncodedContent(new Dictionary<string, string>
-            {
-                ["grant_type"] = "refresh_token",
-                ["refresh_token"] = settings.RefreshToken,
-                ["client_secret"] = settings.ClientSecret
-            });
-
-            using var request = new HttpRequestMessage(HttpMethod.Post, settings.TokenUrl)
-            {
-                Content = content
-            };
-            request.Headers.TryAddWithoutValidation("Accept-Version", "20240501");
-
             var client = httpClientFactory.CreateClient("tastytrade");
-            using var response = await client.SendAsync(request, cancellationToken);
-            var body = await response.Content.ReadAsStringAsync(cancellationToken);
+            var (response, body) = await SendTokenRequestAsync(
+                client,
+                settings.TokenUrl,
+                settings.ClientId,
+                settings.ClientSecret,
+                new Dictionary<string, string>
+                {
+                    ["grant_type"] = "refresh_token",
+                    ["refresh_token"] = settings.RefreshToken,
+                    ["client_id"] = settings.ClientId,
+                    ["client_secret"] = settings.ClientSecret
+                },
+                new Dictionary<string, string>
+                {
+                    ["grant_type"] = "refresh_token",
+                    ["refresh_token"] = settings.RefreshToken
+                },
+                cancellationToken);
+
             if (!response.IsSuccessStatusCode)
             {
                 return new TastytradeOAuthCallbackResult(
@@ -185,6 +195,60 @@ public sealed class TastytradeOAuthService(
         return baseUrl
             + separator
             + string.Join("&", values.Select(item => $"{Uri.EscapeDataString(item.Key)}={Uri.EscapeDataString(item.Value)}"));
+    }
+
+    private static async Task<(HttpResponseMessage Response, string Body)> SendTokenRequestAsync(
+        HttpClient client,
+        string tokenUrl,
+        string clientId,
+        string clientSecret,
+        IReadOnlyDictionary<string, string> formCredentialsFields,
+        IReadOnlyDictionary<string, string> basicAuthFields,
+        CancellationToken cancellationToken)
+    {
+        var first = await SendTokenRequestOnceAsync(
+            client,
+            tokenUrl,
+            formCredentialsFields,
+            authorization: null,
+            cancellationToken);
+
+        if (first.Response.IsSuccessStatusCode || first.Response.StatusCode != System.Net.HttpStatusCode.Unauthorized)
+        {
+            return first;
+        }
+
+        first.Response.Dispose();
+        var basicCredential = Convert.ToBase64String(Encoding.UTF8.GetBytes($"{clientId}:{clientSecret}"));
+        return await SendTokenRequestOnceAsync(
+            client,
+            tokenUrl,
+            basicAuthFields,
+            new AuthenticationHeaderValue("Basic", basicCredential),
+            cancellationToken);
+    }
+
+    private static async Task<(HttpResponseMessage Response, string Body)> SendTokenRequestOnceAsync(
+        HttpClient client,
+        string tokenUrl,
+        IReadOnlyDictionary<string, string> fields,
+        AuthenticationHeaderValue? authorization,
+        CancellationToken cancellationToken)
+    {
+        using var content = new FormUrlEncodedContent(fields);
+        var request = new HttpRequestMessage(HttpMethod.Post, tokenUrl)
+        {
+            Content = content
+        };
+        request.Headers.Accept.ParseAdd("application/json");
+        if (authorization is not null)
+        {
+            request.Headers.Authorization = authorization;
+        }
+
+        var response = await client.SendAsync(request, cancellationToken);
+        var body = await response.Content.ReadAsStringAsync(cancellationToken);
+        return (response, body);
     }
 
     private static string? ReadString(JsonElement element, string propertyName)

@@ -154,9 +154,7 @@ public sealed class BrokerSettingsStore
             StreamerBaseUrl = string.IsNullOrWhiteSpace(settings.StreamerBaseUrl)
                 ? sandboxDefaults ? "wss://streamer.cert.tastyworks.com" : "wss://streamer.tastyworks.com"
                 : settings.StreamerBaseUrl.Trim().TrimEnd('/'),
-            AuthorizationUrl = string.IsNullOrWhiteSpace(settings.AuthorizationUrl)
-                ? $"{apiBaseUrl}/oauth/authorize"
-                : settings.AuthorizationUrl.Trim(),
+            AuthorizationUrl = NormalizeTastytradeAuthorizationUrl(settings.AuthorizationUrl, sandboxDefaults),
             TokenUrl = string.IsNullOrWhiteSpace(settings.TokenUrl)
                 ? $"{apiBaseUrl}/oauth/token"
                 : settings.TokenUrl.Trim(),
@@ -261,6 +259,19 @@ public sealed class BrokerSettingsStore
         {
             errors.Add($"{prefix}.account_number is required when enabled");
         }
+    }
+
+    private static string NormalizeTastytradeAuthorizationUrl(string authorizationUrl, bool sandboxDefaults)
+    {
+        if (string.IsNullOrWhiteSpace(authorizationUrl)
+            || authorizationUrl.EndsWith("/oauth/authorize", StringComparison.OrdinalIgnoreCase))
+        {
+            return sandboxDefaults
+                ? "https://my.cert.tastytrade.com/auth.html"
+                : "https://my.tastytrade.com/auth.html";
+        }
+
+        return authorizationUrl.Trim();
     }
 
     private static BrokerSettings Clone(BrokerSettings settings)

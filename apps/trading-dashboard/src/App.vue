@@ -39,6 +39,7 @@ import {
   onAuthExpired,
   refreshTastytradeAccessToken,
   resumeTrading,
+  startTastytradeOAuth,
   submitMarketOrder,
   submitManualTrade,
   testBrokerConnection,
@@ -77,6 +78,7 @@ const activeAction = ref('')
 const isSavingRisk = ref(false)
 const isSavingBroker = ref(false)
 const isTestingBroker = ref(false)
+const isStartingTastytradeOAuth = ref(false)
 const isRefreshingTastytradeToken = ref(false)
 const isSubmittingTrade = ref(false)
 const isSafetyActionRunning = ref(false)
@@ -120,6 +122,13 @@ const safetyStatusClass = computed(() => {
   if (riskSettings.value?.enable_auto_trading) return 'enabled'
   return 'paused'
 })
+const activeTastytradeForm = computed<TastytradeSettings | null>(() => {
+  if (!brokerForm.value || brokerForm.value.mode !== 'Tastytrade') return null
+  return brokerForm.value.tastytrade_environment === 'Live'
+    ? brokerForm.value.tastytrade_live
+    : brokerForm.value.tastytrade_sandbox
+})
+const hasTastytradeRefreshToken = computed(() => Boolean(activeTastytradeForm.value?.refresh_token.trim()))
 const manualTrade = ref<TradingSignalRequest>({
   type: 'entry',
   direction: 'SHORT',
@@ -329,10 +338,10 @@ async function refreshData() {
 
   try {
     await getHealth()
-    const [nextSignals, nextOrders, nextPositions, nextClosedPositions, nextAuditLogs, nextDailyPerformance, nextRiskSettings, nextBrokerMode, nextBrokerSettings] = await Promise.all([
+    const [signalsResult, ordersResult, positionsResult, closedPositionsResult, auditLogsResult, dailyPerformanceResult, nextRiskSettings, nextBrokerMode, nextBrokerSettings] = await Promise.all([
       getSignals(),
-      getOrders(),
-      getPositions(),
+      getOrders().catch((error) => error),
+      getPositions().catch((error) => error),
       getClosedPositions(closedPositionsDate.value),
       getAuditLogs(),
       getDailyPerformance(),
@@ -341,12 +350,22 @@ async function refreshData() {
       getBrokerSettings(),
     ])
 
-    signals.value = nextSignals
-    orders.value = nextOrders
-    positions.value = nextPositions
-    closedPositions.value = nextClosedPositions
-    auditLogs.value = nextAuditLogs
-    dailyPerformance.value = nextDailyPerformance
+    signals.value = signalsResult
+    if (ordersResult instanceof Error) {
+      orders.value = []
+      errorMessage.value = ordersResult.message
+    } else {
+      orders.value = ordersResult
+    }
+    if (positionsResult instanceof Error) {
+      positions.value = []
+      errorMessage.value = errorMessage.value || positionsResult.message
+    } else {
+      positions.value = positionsResult
+    }
+    closedPositions.value = closedPositionsResult
+    auditLogs.value = auditLogsResult
+    dailyPerformance.value = dailyPerformanceResult
     riskSettings.value = nextRiskSettings
     brokerStatus.value = nextBrokerMode
     brokerSettings.value = nextBrokerSettings
@@ -655,6 +674,26 @@ async function handleRefreshTastytradeToken() {
   }
 }
 
+async function handleStartTastytradeOAuth() {
+  if (!brokerForm.value) return
+
+  isStartingTastytradeOAuth.value = true
+  brokerSaveMessage.value = ''
+  errorMessage.value = ''
+
+  try {
+    brokerForm.value.mode = 'Tastytrade'
+    const saved = await updateBrokerSettings(normalizeBrokerSettings(brokerForm.value))
+    brokerSettings.value = saved
+    brokerForm.value = cloneBrokerSettings(saved)
+    const result = await startTastytradeOAuth()
+    window.location.assign(result.authorization_url)
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : 'Tastytrade OAuth start failed'
+    isStartingTastytradeOAuth.value = false
+  }
+}
+
 async function handleSubmitManualTrade() {
   isSubmittingTrade.value = true
   tradeMessage.value = ''
@@ -916,7 +955,7 @@ function normalizeTastytradeSettings(settings: TastytradeSettings, sandboxDefaul
   return {
     api_base_url: apiBaseUrl,
     streamer_base_url: settings.streamer_base_url.trim() || (sandboxDefaults ? 'wss://streamer.cert.tastyworks.com' : 'wss://streamer.tastyworks.com'),
-    authorization_url: settings.authorization_url.trim() || `${apiBaseUrl}/oauth/authorize`,
+    authorization_url: normalizeTastytradeAuthorizationUrl(settings.authorization_url, sandboxDefaults),
     token_url: settings.token_url.trim() || `${apiBaseUrl}/oauth/token`,
     client_id: settings.client_id.trim(),
     client_secret: settings.client_secret,
@@ -930,6 +969,15 @@ function normalizeTastytradeSettings(settings: TastytradeSettings, sandboxDefaul
     enabled: settings.enabled,
     read_only: settings.read_only,
   }
+}
+
+function normalizeTastytradeAuthorizationUrl(value: string, sandboxDefaults: boolean) {
+  const trimmed = value.trim()
+  if (!trimmed || trimmed.endsWith('/oauth/authorize')) {
+    return sandboxDefaults ? 'https://my.cert.tastytrade.com/auth.html' : 'https://my.tastytrade.com/auth.html'
+  }
+
+  return trimmed
 }
 
 async function handleLogin() {
@@ -1912,10 +1960,16 @@ watch(closedPositionsDate, () => {
               </label>
             </div>
 
-            <button class="action-button secondary" type="button" :disabled="isSavingBroker || isRefreshingTastytradeToken" @click="handleRefreshTastytradeToken">
-              <Server :size="16" />
-              <span>{{ isRefreshingTastytradeToken ? 'Refreshing Token' : 'Refresh Access Token' }}</span>
-            </button>
+            <div class="settings-actions compact-actions">
+              <button class="action-button secondary" type="button" :disabled="isSavingBroker || isStartingTastytradeOAuth || isRefreshingTastytradeToken" @click="handleStartTastytradeOAuth">
+                <Server :size="16" />
+                <span>{{ isStartingTastytradeOAuth ? 'Opening OAuth' : 'Connect OAuth' }}</span>
+              </button>
+              <button class="action-button secondary" type="button" :disabled="isSavingBroker || isStartingTastytradeOAuth || isRefreshingTastytradeToken || !hasTastytradeRefreshToken" @click="handleRefreshTastytradeToken">
+                <RefreshCw :size="16" />
+                <span>{{ isRefreshingTastytradeToken ? 'Refreshing Token' : hasTastytradeRefreshToken ? 'Refresh Access Token' : 'No Refresh Token' }}</span>
+              </button>
+            </div>
 
             <label class="toggle-row">
               <span>
@@ -1988,10 +2042,16 @@ watch(closedPositionsDate, () => {
               </label>
             </div>
 
-            <button class="action-button secondary" type="button" :disabled="isSavingBroker || isRefreshingTastytradeToken" @click="handleRefreshTastytradeToken">
-              <Server :size="16" />
-              <span>{{ isRefreshingTastytradeToken ? 'Refreshing Token' : 'Refresh Access Token' }}</span>
-            </button>
+            <div class="settings-actions compact-actions">
+              <button class="action-button secondary" type="button" :disabled="isSavingBroker || isStartingTastytradeOAuth || isRefreshingTastytradeToken" @click="handleStartTastytradeOAuth">
+                <Server :size="16" />
+                <span>{{ isStartingTastytradeOAuth ? 'Opening OAuth' : 'Connect OAuth' }}</span>
+              </button>
+              <button class="action-button secondary" type="button" :disabled="isSavingBroker || isStartingTastytradeOAuth || isRefreshingTastytradeToken || !hasTastytradeRefreshToken" @click="handleRefreshTastytradeToken">
+                <RefreshCw :size="16" />
+                <span>{{ isRefreshingTastytradeToken ? 'Refreshing Token' : hasTastytradeRefreshToken ? 'Refresh Access Token' : 'No Refresh Token' }}</span>
+              </button>
+            </div>
 
             <label class="toggle-row">
               <span>

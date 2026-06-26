@@ -32,7 +32,8 @@ export async function throwApiError(response: Response, source = 'Trading Engine
     throw new Error('Login expired. Please sign in again.')
   }
 
-  throw new Error(`HTTP ${response.status} from ${source}`)
+  const details = await readApiErrorDetails(response)
+  throw new Error(details ? `${source}: ${details}` : `HTTP ${response.status} from ${source}`)
 }
 
 export async function login(username: string, password: string) {
@@ -366,6 +367,24 @@ async function postBrokerAction(path: string, body: Record<string, unknown>): Pr
   return {
     cancelledOrders: readNumber(payload, 'cancelledOrders', 'CancelledOrders'),
     closedPositions: readNumber(payload, 'closedPositions', 'ClosedPositions'),
+  }
+}
+
+async function readApiErrorDetails(response: Response) {
+  const bodyText = await response.text().catch(() => '')
+  if (!bodyText) return ''
+
+  try {
+    const payload = JSON.parse(bodyText) as Record<string, unknown>
+    const errors = payload.errors ?? payload.Errors
+    if (Array.isArray(errors) && errors.length > 0) {
+      return errors.map(String).join('; ')
+    }
+
+    const message = payload.message ?? payload.Message ?? payload.detail ?? payload.title
+    return typeof message === 'string' ? message : bodyText
+  } catch {
+    return bodyText
   }
 }
 

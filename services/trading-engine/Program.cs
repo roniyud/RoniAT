@@ -74,6 +74,7 @@ builder.Services.AddScoped<RiskValidator>();
 builder.Services.AddHttpClient("tastytrade", client =>
 {
     client.Timeout = TimeSpan.FromSeconds(10);
+    client.DefaultRequestHeaders.UserAgent.ParseAdd("RoniAT/1.0");
 });
 builder.Services.Configure<BrokerSettings>(options =>
 {
@@ -104,7 +105,7 @@ builder.Services.Configure<BrokerSettings>(options =>
     {
         ApiBaseUrl = tastytradeSection.GetValue<string>("Sandbox:ApiBaseUrl") ?? "https://api.cert.tastyworks.com",
         StreamerBaseUrl = tastytradeSection.GetValue<string>("Sandbox:StreamerBaseUrl") ?? "wss://streamer.cert.tastyworks.com",
-        AuthorizationUrl = tastytradeSection.GetValue<string>("Sandbox:AuthorizationUrl") ?? "https://api.cert.tastyworks.com/oauth/authorize",
+        AuthorizationUrl = tastytradeSection.GetValue<string>("Sandbox:AuthorizationUrl") ?? "https://my.cert.tastytrade.com/auth.html",
         TokenUrl = tastytradeSection.GetValue<string>("Sandbox:TokenUrl") ?? "https://api.cert.tastyworks.com/oauth/token",
         ClientId = tastytradeSection.GetValue<string>("Sandbox:ClientId") ?? "",
         ClientSecret = tastytradeSection.GetValue<string>("Sandbox:ClientSecret") ?? "",
@@ -122,7 +123,7 @@ builder.Services.Configure<BrokerSettings>(options =>
     {
         ApiBaseUrl = tastytradeSection.GetValue<string>("Live:ApiBaseUrl") ?? "https://api.tastyworks.com",
         StreamerBaseUrl = tastytradeSection.GetValue<string>("Live:StreamerBaseUrl") ?? "wss://streamer.tastyworks.com",
-        AuthorizationUrl = tastytradeSection.GetValue<string>("Live:AuthorizationUrl") ?? "https://api.tastyworks.com/oauth/authorize",
+        AuthorizationUrl = tastytradeSection.GetValue<string>("Live:AuthorizationUrl") ?? "https://my.tastytrade.com/auth.html",
         TokenUrl = tastytradeSection.GetValue<string>("Live:TokenUrl") ?? "https://api.tastyworks.com/oauth/token",
         ClientId = tastytradeSection.GetValue<string>("Live:ClientId") ?? "",
         ClientSecret = tastytradeSection.GetValue<string>("Live:ClientSecret") ?? "",
