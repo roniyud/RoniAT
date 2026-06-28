@@ -1,6 +1,7 @@
 using System.Net.Http.Headers;
 using System.Net;
 using System.Text.Json;
+using RoniAT.TradingEngine.Contracts;
 using RoniAT.TradingEngine.Models;
 
 namespace RoniAT.TradingEngine.Services;
@@ -17,6 +18,30 @@ public sealed class TastytradeAccountClient(
         using var document = JsonDocument.Parse(json);
         CollectStringsByProperty(document.RootElement, accounts, "account-number", "account_number", "accountNumber");
         return accounts.OrderBy(account => account, StringComparer.OrdinalIgnoreCase).ToArray();
+    }
+
+    public async Task<AccountBalanceResponse> GetBalanceAsync(CancellationToken cancellationToken = default)
+    {
+        var brokerSettings = settingsStore.Get();
+        var settings = settingsStore.GetActiveTastytradeSettings();
+        var account = RequireAccount(settings);
+        var json = await GetStringAsync($"/accounts/{Uri.EscapeDataString(account)}/balances", cancellationToken);
+
+        using var document = JsonDocument.Parse(json);
+        return new AccountBalanceResponse(
+            Mode: "Tastytrade",
+            Environment: brokerSettings.TastytradeEnvironment,
+            AccountNumber: ReadStringDeep(document.RootElement, "account-number", "account_number", "accountNumber") is { Length: > 0 } accountNumber
+                ? accountNumber
+                : account,
+            Currency: ReadStringDeep(document.RootElement, "currency", "currency-code", "currency_code") is { Length: > 0 } currency
+                ? currency
+                : "USD",
+            CashBalance: ReadNullableDecimalDeep(document.RootElement, "cash-balance", "cash_balance", "cashBalance"),
+            NetLiquidatingValue: ReadNullableDecimalDeep(document.RootElement, "net-liquidating-value", "net_liquidating_value", "netLiquidatingValue", "net-liq", "net_liq"),
+            EquityBuyingPower: ReadNullableDecimalDeep(document.RootElement, "equity-buying-power", "equity_buying_power", "equityBuyingPower"),
+            DerivativeBuyingPower: ReadNullableDecimalDeep(document.RootElement, "derivative-buying-power", "derivative_buying_power", "derivativeBuyingPower"),
+            UpdatedAt: DateTimeOffset.UtcNow);
     }
 
     public async Task<IReadOnlyList<PositionRecord>> GetPositionsAsync(CancellationToken cancellationToken = default)
@@ -281,6 +306,21 @@ public sealed class TastytradeAccountClient(
             : "";
     }
 
+    private static string ReadStringDeep(JsonElement element, params string[] names)
+    {
+        if (TryFindPropertyDeep(element, out var value, names))
+        {
+            return value.ValueKind switch
+            {
+                JsonValueKind.String => value.GetString() ?? "",
+                JsonValueKind.Number => value.GetRawText(),
+                _ => ""
+            };
+        }
+
+        return "";
+    }
+
     private static decimal ReadDecimal(JsonElement element, params string[] names)
     {
         return ReadNullableDecimal(element, names) ?? 0m;
@@ -304,6 +344,59 @@ public sealed class TastytradeAccountClient(
         }
 
         return null;
+    }
+
+    private static decimal? ReadNullableDecimalDeep(JsonElement element, params string[] names)
+    {
+        if (!TryFindPropertyDeep(element, out var value, names))
+        {
+            return null;
+        }
+
+        if (value.ValueKind == JsonValueKind.Number && value.TryGetDecimal(out var parsed))
+        {
+            return parsed;
+        }
+
+        if (value.ValueKind == JsonValueKind.String && decimal.TryParse(value.GetString(), out parsed))
+        {
+            return parsed;
+        }
+
+        return null;
+    }
+
+    private static bool TryFindPropertyDeep(JsonElement element, out JsonElement value, params string[] names)
+    {
+        if (TryFindProperty(element, out value, names))
+        {
+            return true;
+        }
+
+        if (element.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var property in element.EnumerateObject())
+            {
+                if (TryFindPropertyDeep(property.Value, out value, names))
+                {
+                    return true;
+                }
+            }
+        }
+
+        if (element.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in element.EnumerateArray())
+            {
+                if (TryFindPropertyDeep(item, out value, names))
+                {
+                    return true;
+                }
+            }
+        }
+
+        value = default;
+        return false;
     }
 
     private static DateTimeOffset ReadDateTime(JsonElement element, DateTimeOffset fallback, params string[] names)

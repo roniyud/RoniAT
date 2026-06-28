@@ -1,4 +1,4 @@
-import type { AuditLogRecord, BrokerConnectionTestResult, BrokerMode, BrokerSettings, ClosedPositionRecord, DailyPerformance, MarketOrderRequest, MarketOrderResponse, OrderRecord, PaperActionResult, PositionRecord, ProtectionUpdateRequest, ProtectionUpdateResponse, RiskSettings, TradingSignal, TradingSignalRequest } from './types'
+import type { AccountBalance, AuditLogRecord, BrokerConnectionTestResult, BrokerMode, BrokerSettings, ClosedPositionRecord, DailyPerformance, MarketOrderRequest, MarketOrderResponse, OrderRecord, PaperActionResult, PositionRecord, ProtectionUpdateRequest, ProtectionUpdateResponse, RiskSettings, TradingSignal, TradingSignalRequest } from './types'
 
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/+$/, '')
 const AUTH_TOKEN_KEY = 'roniat.auth.token'
@@ -47,7 +47,15 @@ export async function login(username: string, password: string) {
   })
 
   if (!response.ok) {
-    throw new Error(response.status === 401 ? 'Invalid username or password' : `HTTP ${response.status} from Trading Engine`)
+    if (response.status === 401) {
+      throw new Error('Invalid username or password')
+    }
+
+    const message = await response.json()
+      .then((payload) => typeof payload?.message === 'string' ? payload.message : '')
+      .catch(() => '')
+
+    throw new Error(message || `HTTP ${response.status} from Trading Engine`)
   }
 
   const payload = await response.json() as { token?: string }
@@ -104,6 +112,10 @@ export async function getAuditLogs() {
 
 export async function getDailyPerformance() {
   return request<DailyPerformance>('/api/performance/daily')
+}
+
+export async function getAccountBalance() {
+  return request<AccountBalance>('/api/account/balance')
 }
 
 export async function getBrokerMode() {

@@ -225,16 +225,31 @@ h3 {
   background: #ffffff;
 }
 
-.safety-strip > div:first-child {
+.safety-summary {
   display: flex;
   align-items: center;
   gap: 8px;
   min-width: 0;
 }
 
+.safety-summary > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
 .safety-strip strong {
   color: #181a1b;
   font-size: 14px;
+}
+
+.safety-strip span {
+  overflow: hidden;
+  color: #667085;
+  font-size: 12px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .safety-strip.enabled {
@@ -277,39 +292,65 @@ h3 {
 
 .metrics-grid {
   display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
-  gap: 10px;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 8px;
   margin-bottom: 14px;
 }
 
 .metric-tile {
   display: flex;
   align-items: center;
-  gap: 12px;
-  min-height: 76px;
-  padding: 14px;
+  gap: 8px;
+  min-height: 58px;
+  padding: 9px 10px;
   border: 1px solid #dfe5e7;
   border-radius: 8px;
   background: #ffffff;
+  min-width: 0;
 }
 
 .metric-tile svg {
+  width: 18px;
+  height: 18px;
   color: #53676d;
+  flex: 0 0 auto;
+}
+
+.metric-tile div {
+  min-width: 0;
 }
 
 .metric-tile span,
 .position-row span {
   display: block;
+  overflow: hidden;
   color: #667085;
-  font-size: 12px;
+  font-size: 11px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .metric-tile strong {
   display: block;
-  margin-top: 4px;
+  overflow: hidden;
+  margin-top: 3px;
   color: #181a1b;
-  font-size: 22px;
+  font-size: 17px;
   line-height: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.metric-tile small {
+  display: block;
+  overflow: hidden;
+  margin-top: 4px;
+  color: #667085;
+  font-size: 11px;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .tabbar {

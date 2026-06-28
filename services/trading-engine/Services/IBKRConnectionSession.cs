@@ -20,10 +20,12 @@ public sealed class IBKRConnectionSession(
     private static readonly TimeSpan HandshakeTimeout = TimeSpan.FromSeconds(6);
     private static readonly TimeSpan AccountsTimeout = TimeSpan.FromSeconds(3);
     private static readonly TimeSpan PositionsTimeout = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan AccountSummaryTimeout = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan HistoricalDataTimeout = TimeSpan.FromSeconds(12);
     private static readonly TimeSpan OrderStatusTimeout = TimeSpan.FromSeconds(10);
 
     private readonly SemaphoreSlim connectionLock = new(1, 1);
+    private int nextAccountSummaryRequestId = 6000;
     private int nextMarketDataRequestId = 7000;
     private int nextStreamingRequestId = 9000;
     private EClientSocket? client;
@@ -272,6 +274,66 @@ public sealed class IBKRConnectionSession(
                 })
                 .Where(position => position.Quantity > 0)
                 .ToArray();
+        }
+        finally
+        {
+            connectionLock.Release();
+        }
+    }
+
+    public async Task<AccountBalanceResponse> GetAccountBalanceAsync(CancellationToken cancellationToken = default)
+    {
+        await connectionLock.WaitAsync(cancellationToken);
+
+        try
+        {
+            var brokerSettings = settingsStore.Get();
+            var settings = settingsStore.GetActiveIBKRSettings();
+
+            if (!brokerSettings.Mode.Equals("IBKR", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException("Broker mode is not IBKR");
+            }
+
+            var result = await EnsureConnectedLockedAsync(cancellationToken);
+            if (!result.HandshakeOk || client?.IsConnected() != true || wrapper is null)
+            {
+                throw new InvalidOperationException(result.Message);
+            }
+
+            var requestId = Interlocked.Increment(ref nextAccountSummaryRequestId);
+            wrapper.ResetAccountSummary(requestId, settings.Account);
+
+            client.reqAccountSummary(
+                requestId,
+                "All",
+                "NetLiquidation,TotalCashValue,BuyingPower,AvailableFunds");
+
+            IBKRAccountSummarySnapshot? summary;
+            try
+            {
+                summary = await wrapper.WaitForAccountSummaryAsync(requestId, AccountSummaryTimeout, cancellationToken);
+            }
+            finally
+            {
+                client.cancelAccountSummary(requestId);
+            }
+
+            if (summary is null)
+            {
+                throw new InvalidOperationException("IBKR account summary timed out");
+            }
+
+            return new AccountBalanceResponse(
+                "IBKR",
+                brokerSettings.IbkrEnvironment,
+                summary.Account,
+                summary.Currency,
+                summary.TotalCashValue,
+                summary.NetLiquidation,
+                summary.BuyingPower,
+                summary.AvailableFunds ?? summary.BuyingPower,
+                DateTimeOffset.UtcNow);
         }
         finally
         {
@@ -1133,6 +1195,14 @@ public sealed class IBKRConnectionSession(
 
     private sealed record InferredExit(decimal Price, string Reason, string Source);
     private sealed record InferredCandleExit(decimal Price, string Reason, long Time);
+    private sealed record IBKRAccountSummaryValue(string Value, string Currency);
+    private sealed record IBKRAccountSummarySnapshot(
+        string Account,
+        string Currency,
+        decimal? NetLiquidation,
+        decimal? TotalCashValue,
+        decimal? BuyingPower,
+        decimal? AvailableFunds);
 
     private void CancelTrackedWorkingOrders(IReadOnlyList<OrderRecord> orders)
     {
@@ -1167,6 +1237,7 @@ public sealed class IBKRConnectionSession(
         private readonly TaskCompletionSource<int> handshakeSource = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly TaskCompletionSource<IReadOnlyList<string>> accountsSource = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly object diagnosticsLock = new();
+        private readonly object accountSummaryLock = new();
         private readonly object positionsLock = new();
         private readonly object historicalDataLock = new();
         private readonly object marketDataLock = new();
@@ -1175,6 +1246,10 @@ public sealed class IBKRConnectionSession(
         private readonly Dictionary<int, string> marketDataSymbols = [];
         private readonly Dictionary<int, OrderStatusSnapshot> orderStatuses = [];
         private readonly Dictionary<int, TaskCompletionSource<OrderStatusSnapshot>> orderStatusSources = [];
+        private int accountSummaryRequestId;
+        private string accountSummaryAccount = "";
+        private readonly Dictionary<string, Dictionary<string, IBKRAccountSummaryValue>> accountSummaryValues = new(StringComparer.OrdinalIgnoreCase);
+        private TaskCompletionSource<IBKRAccountSummarySnapshot> accountSummarySource = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private List<IBKRPositionSnapshot> positions = [];
         private TaskCompletionSource<IReadOnlyList<IBKRPositionSnapshot>> positionsSource = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private int historicalDataRequestId;
@@ -1230,6 +1305,46 @@ public sealed class IBKRConnectionSession(
             lock (positionsLock)
             {
                 positionsSource.TrySetResult(positions.ToArray());
+            }
+        }
+
+        public override void accountSummary(int reqId, string account, string tag, string value, string currency)
+        {
+            lock (accountSummaryLock)
+            {
+                if (reqId != accountSummaryRequestId || !IsRequestedAccount(account))
+                {
+                    return;
+                }
+
+                if (!accountSummaryValues.TryGetValue(account, out var values))
+                {
+                    values = new Dictionary<string, IBKRAccountSummaryValue>(StringComparer.OrdinalIgnoreCase);
+                    accountSummaryValues[account] = values;
+                }
+
+                values[tag] = new IBKRAccountSummaryValue(value, currency);
+            }
+        }
+
+        public override void accountSummaryEnd(int reqId)
+        {
+            lock (accountSummaryLock)
+            {
+                if (reqId != accountSummaryRequestId)
+                {
+                    return;
+                }
+
+                var snapshot = BuildAccountSummarySnapshot();
+                if (snapshot is not null)
+                {
+                    accountSummarySource.TrySetResult(snapshot);
+                }
+                else
+                {
+                    accountSummarySource.TrySetException(new InvalidOperationException("IBKR account summary returned no balance values"));
+                }
             }
         }
 
@@ -1335,6 +1450,7 @@ public sealed class IBKRConnectionSession(
             AddDiagnostic("connectionClosed received");
             handshakeSource.TrySetException(new InvalidOperationException("IBKR API connection closed before handshake completed"));
             accountsSource.TrySetException(new InvalidOperationException("IBKR API connection closed before managed accounts were received"));
+            accountSummarySource.TrySetException(new InvalidOperationException("IBKR API connection closed before account summary was received"));
             historicalDataSource.TrySetException(new InvalidOperationException("IBKR API connection closed before historical data was received"));
             FailPendingOrders(new InvalidOperationException("IBKR API connection closed before order status was received"));
         }
@@ -1344,6 +1460,7 @@ public sealed class IBKRConnectionSession(
             AddDiagnostic($"error exception: {e.Message}");
             handshakeSource.TrySetException(e);
             accountsSource.TrySetException(e);
+            accountSummarySource.TrySetException(e);
             historicalDataSource.TrySetException(e);
             FailPendingOrders(e);
         }
@@ -1362,6 +1479,11 @@ public sealed class IBKRConnectionSession(
                 historicalDataSource.TrySetException(new InvalidOperationException($"IBKR historical data error {errorCode}: {errorMsg}"));
             }
 
+            if (id == accountSummaryRequestId && IsRequestError(errorCode))
+            {
+                accountSummarySource.TrySetException(new InvalidOperationException($"IBKR account summary error {errorCode}: {errorMsg}"));
+            }
+
             lock (ordersLock)
             {
                 if (orderStatusSources.TryGetValue(id, out var source))
@@ -1376,6 +1498,7 @@ public sealed class IBKRConnectionSession(
             AddDiagnostic($"reader error: {error.Message}");
             handshakeSource.TrySetException(error);
             accountsSource.TrySetException(error);
+            accountSummarySource.TrySetException(error);
             positionsSource.TrySetException(error);
             historicalDataSource.TrySetException(error);
             FailPendingOrders(error);
@@ -1415,6 +1538,17 @@ public sealed class IBKRConnectionSession(
             {
                 positions = [];
                 positionsSource = new TaskCompletionSource<IReadOnlyList<IBKRPositionSnapshot>>(TaskCreationOptions.RunContinuationsAsynchronously);
+            }
+        }
+
+        public void ResetAccountSummary(int requestId, string account)
+        {
+            lock (accountSummaryLock)
+            {
+                accountSummaryRequestId = requestId;
+                accountSummaryAccount = account.Trim();
+                accountSummaryValues.Clear();
+                accountSummarySource = new TaskCompletionSource<IBKRAccountSummarySnapshot>(TaskCreationOptions.RunContinuationsAsynchronously);
             }
         }
 
@@ -1516,6 +1650,32 @@ public sealed class IBKRConnectionSession(
             }
         }
 
+        public async Task<IBKRAccountSummarySnapshot?> WaitForAccountSummaryAsync(int requestId, TimeSpan timeout, CancellationToken cancellationToken)
+        {
+            Task<IBKRAccountSummarySnapshot> task;
+            lock (accountSummaryLock)
+            {
+                if (requestId != accountSummaryRequestId)
+                {
+                    return null;
+                }
+
+                task = accountSummarySource.Task;
+            }
+
+            using var summaryTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            summaryTimeout.CancelAfter(timeout);
+
+            try
+            {
+                return await task.WaitAsync(summaryTimeout.Token);
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                return null;
+            }
+        }
+
         public async Task<IReadOnlyList<IBKRPositionSnapshot>?> WaitForPositionsAsync(TimeSpan timeout, CancellationToken cancellationToken)
         {
             using var positionsTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -1537,6 +1697,59 @@ public sealed class IBKRConnectionSession(
             {
                 diagnostics.Add(message);
             }
+        }
+
+        private bool IsRequestedAccount(string account)
+        {
+            return string.IsNullOrWhiteSpace(accountSummaryAccount)
+                || account.Equals(accountSummaryAccount, StringComparison.OrdinalIgnoreCase);
+        }
+
+        private IBKRAccountSummarySnapshot? BuildAccountSummarySnapshot()
+        {
+            if (accountSummaryValues.Count == 0)
+            {
+                return null;
+            }
+
+            var accountEntry = !string.IsNullOrWhiteSpace(accountSummaryAccount)
+                && accountSummaryValues.TryGetValue(accountSummaryAccount, out var requestedValues)
+                    ? new KeyValuePair<string, Dictionary<string, IBKRAccountSummaryValue>>(accountSummaryAccount, requestedValues)
+                    : accountSummaryValues.First();
+
+            var values = accountEntry.Value;
+            var currency = values.Values.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value.Currency))?.Currency ?? "USD";
+            var netLiquidation = ReadAccountSummaryDecimal(values, "NetLiquidation");
+            var cash = ReadAccountSummaryDecimal(values, "TotalCashValue");
+            var buyingPower = ReadAccountSummaryDecimal(values, "BuyingPower");
+            var availableFunds = ReadAccountSummaryDecimal(values, "AvailableFunds");
+
+            if (netLiquidation is null && cash is null && buyingPower is null && availableFunds is null)
+            {
+                return null;
+            }
+
+            return new IBKRAccountSummarySnapshot(
+                accountEntry.Key,
+                string.IsNullOrWhiteSpace(currency) ? "USD" : currency,
+                netLiquidation,
+                cash,
+                buyingPower,
+                availableFunds);
+        }
+
+        private static decimal? ReadAccountSummaryDecimal(
+            IReadOnlyDictionary<string, IBKRAccountSummaryValue> values,
+            string tag)
+        {
+            if (!values.TryGetValue(tag, out var value))
+            {
+                return null;
+            }
+
+            return decimal.TryParse(value.Value, NumberStyles.Number, CultureInfo.InvariantCulture, out var parsed)
+                ? parsed
+                : null;
         }
 
         private static string NormalizeSymbol(Contract contract)
@@ -1590,6 +1803,11 @@ public sealed class IBKRConnectionSession(
         private static bool IsHistoricalDataError(int errorCode)
         {
             return errorCode is 162 or 165 or 200 or 321 or 354 or 366 or 420;
+        }
+
+        private static bool IsRequestError(int errorCode)
+        {
+            return errorCode is 321 or 322 or 504 or 1100 or 1101 or 1102;
         }
 
         private static bool IsTradePriceTick(int field)

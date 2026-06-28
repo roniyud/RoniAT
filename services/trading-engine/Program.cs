@@ -240,9 +240,14 @@ app.MapGet("/health", () => Results.Ok(new { status = "ok", service = "trading-e
     .WithName("Health")
     .WithOpenApi();
 
-app.MapPost("/api/auth/login", (LoginRequest request, DashboardAuthService authService) =>
+app.MapPost("/api/auth/login", (HttpContext context, LoginRequest request, DashboardAuthService authService) =>
 {
-    var result = authService.Login(request.Username, request.Password);
+    var result = authService.Login(request.Username, request.Password, ReadClientAddress(context));
+    if (result.RateLimited)
+    {
+        return Results.Json(new { message = result.Message }, statusCode: StatusCodes.Status429TooManyRequests);
+    }
+
     return result.Ok
         ? Results.Ok(new LoginResponse(true, result.Token, result.ExpiresAt, result.Message))
         : Results.Unauthorized();
@@ -400,6 +405,47 @@ app.MapGet("/api/performance/daily", async (TradingDbContext db) =>
     });
 })
 .WithName("GetDailyPerformance")
+.WithOpenApi();
+
+app.MapGet("/api/account/balance", async (BrokerSettingsStore brokerSettingsStore, TastytradeAccountClient tastytradeClient, IBKRConnectionSession ibkrConnectionSession, CancellationToken cancellationToken) =>
+{
+    var brokerSettings = brokerSettingsStore.Get();
+    if (brokerSettings.Mode.Equals("IBKR", StringComparison.OrdinalIgnoreCase))
+    {
+        try
+        {
+            return Results.Ok(await ibkrConnectionSession.GetAccountBalanceAsync(cancellationToken));
+        }
+        catch (InvalidOperationException error)
+        {
+            return Results.BadRequest(new ValidationErrorResponse([error.Message]));
+        }
+    }
+
+    if (!brokerSettings.Mode.Equals("Tastytrade", StringComparison.OrdinalIgnoreCase))
+    {
+        return Results.Ok(new AccountBalanceResponse(
+            brokerSettings.Mode,
+            brokerSettings.Mode.Equals("IBKR", StringComparison.OrdinalIgnoreCase) ? brokerSettings.IbkrEnvironment : "",
+            "",
+            "USD",
+            null,
+            null,
+            null,
+            null,
+            DateTimeOffset.UtcNow));
+    }
+
+    try
+    {
+        return Results.Ok(await tastytradeClient.GetBalanceAsync(cancellationToken));
+    }
+    catch (InvalidOperationException error)
+    {
+        return Results.BadRequest(new ValidationErrorResponse([error.Message]));
+    }
+})
+.WithName("GetAccountBalance")
 .WithOpenApi();
 
 app.MapGet("/api/market-data/candles", async (
@@ -988,6 +1034,23 @@ static string? ReadBearerToken(HttpContext context)
     return context.Request.Query.TryGetValue("access_token", out var queryToken)
         ? queryToken.ToString()
         : null;
+}
+
+static string ReadClientAddress(HttpContext context)
+{
+    if (context.Request.Headers.TryGetValue("CF-Connecting-IP", out var cloudflareIp)
+        && !string.IsNullOrWhiteSpace(cloudflareIp.FirstOrDefault()))
+    {
+        return cloudflareIp.First()!;
+    }
+
+    if (context.Request.Headers.TryGetValue("X-Forwarded-For", out var forwardedFor)
+        && !string.IsNullOrWhiteSpace(forwardedFor.FirstOrDefault()))
+    {
+        return forwardedFor.First()!.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)[0];
+    }
+
+    return context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
 }
 
 static async Task EnsureClosedPositionsTableAsync(TradingDbContext db)

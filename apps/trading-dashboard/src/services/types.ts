@@ -111,6 +111,18 @@ export type DailyPerformance = {
   closed_trades: number
 }
 
+export type AccountBalance = {
+  mode: string
+  environment: string
+  account_number: string
+  currency: string
+  cash_balance?: number | null
+  net_liquidating_value?: number | null
+  equity_buying_power?: number | null
+  derivative_buying_power?: number | null
+  updated_at: string
+}
+
 export type BrokerMode = {
   mode: string
   environment: string

@@ -23,6 +23,7 @@ import {
   emergencyStop,
   flattenPaperAccount,
   getAuditLogs,
+  getAccountBalance,
   getAuthToken,
   getClosedPositions,
   getDailyPerformance,
@@ -50,7 +51,7 @@ import {
 import { getCandles, startMarketDataStream, type Timeframe } from './services/market-data'
 import type { CandlestickData, UTCTimestamp } from 'lightweight-charts'
 import { createTradingRealtimeClient, type MarketTick, type RealtimeStatus, type TradingUpdate } from './services/realtime'
-import type { ApiState, AuditLogRecord, BrokerConnectionTestResult, BrokerMode, BrokerSettings, ClosedPositionRecord, DailyPerformance, IBKRSettings, MarketOrderResponse, OrderRecord, PositionRecord, RiskSettings, TastytradeSettings, TradingSignal, TradingSignalRequest } from './services/types'
+import type { AccountBalance, ApiState, AuditLogRecord, BrokerConnectionTestResult, BrokerMode, BrokerSettings, ClosedPositionRecord, DailyPerformance, IBKRSettings, MarketOrderResponse, OrderRecord, PositionRecord, RiskSettings, TastytradeSettings, TradingSignal, TradingSignalRequest } from './services/types'
 
 const apiState = ref<ApiState>('loading')
 const isAuthenticated = ref(Boolean(getAuthToken()))
@@ -66,6 +67,7 @@ const closedPositions = ref<ClosedPositionRecord[]>([])
 const closedPositionsDate = ref(getTodayDateInput())
 const auditLogs = ref<AuditLogRecord[]>([])
 const dailyPerformance = ref<DailyPerformance | null>(null)
+const accountBalance = ref<AccountBalance | null>(null)
 const riskSettings = ref<RiskSettings | null>(null)
 const riskForm = ref<RiskSettings | null>(null)
 const brokerStatus = ref<BrokerMode | null>(null)
@@ -121,6 +123,21 @@ const safetyStatusClass = computed(() => {
   if (riskSettings.value?.trading_locked) return 'locked'
   if (riskSettings.value?.enable_auto_trading) return 'enabled'
   return 'paused'
+})
+const brokerHeaderSummary = computed(() => {
+  const status = brokerStatus.value
+  if (!status) return 'Broker loading'
+
+  const mode = status.mode || 'Broker'
+  const environment = status.environment ? ` ${status.environment}` : ''
+  let connection = 'Disconnected'
+
+  if (!status.configured) connection = 'Not Configured'
+  else if (!status.enabled) connection = 'Disabled'
+  else if (status.connected) connection = 'Connected'
+
+  const orderMode = status.read_only ? 'Read Only' : 'Orders Enabled'
+  return `${mode}${environment} / ${connection} / ${orderMode}`
 })
 const activeTastytradeForm = computed<TastytradeSettings | null>(() => {
   if (!brokerForm.value || brokerForm.value.mode !== 'Tastytrade') return null
@@ -338,13 +355,14 @@ async function refreshData() {
 
   try {
     await getHealth()
-    const [signalsResult, ordersResult, positionsResult, closedPositionsResult, auditLogsResult, dailyPerformanceResult, nextRiskSettings, nextBrokerMode, nextBrokerSettings] = await Promise.all([
+    const [signalsResult, ordersResult, positionsResult, closedPositionsResult, auditLogsResult, dailyPerformanceResult, accountBalanceResult, nextRiskSettings, nextBrokerMode, nextBrokerSettings] = await Promise.all([
       getSignals(),
       getOrders().catch((error) => error),
       getPositions().catch((error) => error),
       getClosedPositions(closedPositionsDate.value),
       getAuditLogs(),
       getDailyPerformance(),
+      getAccountBalance().catch((error) => error),
       getRiskSettings(),
       getBrokerMode(),
       getBrokerSettings(),
@@ -366,6 +384,12 @@ async function refreshData() {
     closedPositions.value = closedPositionsResult
     auditLogs.value = auditLogsResult
     dailyPerformance.value = dailyPerformanceResult
+    if (accountBalanceResult instanceof Error) {
+      accountBalance.value = null
+      errorMessage.value = errorMessage.value || accountBalanceResult.message
+    } else {
+      accountBalance.value = accountBalanceResult
+    }
     riskSettings.value = nextRiskSettings
     brokerStatus.value = nextBrokerMode
     brokerSettings.value = nextBrokerSettings
@@ -850,6 +874,15 @@ function formatCurrency(value: number | null | undefined) {
   }).format(value)
 }
 
+function formatBalanceCurrency(value: number | null | undefined, currency?: string) {
+  if (value === null || value === undefined || !Number.isFinite(Number(value))) return '-'
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: currency || 'USD',
+    maximumFractionDigits: 2,
+  }).format(Number(value))
+}
+
 function formatTime(value: string | null | undefined) {
   if (!value) return '-'
   return new Intl.DateTimeFormat('en-US', {
@@ -1142,9 +1175,12 @@ watch(closedPositionsDate, () => {
     </section>
 
     <section class="safety-strip" :class="safetyStatusClass">
-      <div>
+      <div class="safety-summary">
         <ShieldCheck :size="18" />
-        <strong>{{ safetyStatus }}</strong>
+        <div>
+          <strong>{{ safetyStatus }}</strong>
+          <span>{{ brokerHeaderSummary }}</span>
+        </div>
       </div>
       <div class="safety-actions">
         <button
@@ -1204,6 +1240,14 @@ watch(closedPositionsDate, () => {
         <div>
           <span>Auto Trading</span>
           <strong>{{ riskSettings?.enable_auto_trading && !riskSettings?.trading_locked ? 'On' : 'Off' }}</strong>
+        </div>
+      </article>
+      <article class="metric-tile">
+        <BriefcaseBusiness :size="20" />
+        <div>
+          <span>{{ accountBalance?.account_number ? `Balance ${accountBalance.account_number}` : 'Account Balance' }}</span>
+          <strong>{{ formatBalanceCurrency(accountBalance?.net_liquidating_value ?? accountBalance?.cash_balance, accountBalance?.currency) }}</strong>
+          <small>Cash {{ formatBalanceCurrency(accountBalance?.cash_balance, accountBalance?.currency) }}</small>
         </div>
       </article>
       <article class="metric-tile">
