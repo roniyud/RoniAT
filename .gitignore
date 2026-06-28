@@ -15,6 +15,7 @@ services/trading-engine/storage/*.json
 dist/
 dev-dist/
 build/
+publish/
 bin/
 obj/
 .vite/

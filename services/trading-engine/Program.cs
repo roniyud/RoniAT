@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.FileProviders;
+using Microsoft.Extensions.Hosting.WindowsServices;
 using Microsoft.Data.Sqlite;
 using RoniAT.TradingEngine.Contracts;
 using RoniAT.TradingEngine.Data;
@@ -10,6 +11,7 @@ using RoniAT.TradingEngine.Services;
 using RoniAT.TradingEngine.Validation;
 
 var builder = WebApplication.CreateBuilder(args);
+builder.Host.UseWindowsService();
 
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
@@ -48,6 +50,7 @@ builder.Services.ConfigureHttpJsonOptions(options =>
 
 var connectionString = builder.Configuration.GetConnectionString("TradingDb")
     ?? "Data Source=storage/roniat.db";
+connectionString = NormalizeSqliteConnectionString(connectionString, builder.Environment.ContentRootPath);
 
 var dbPath = GetSqlitePath(connectionString, builder.Environment.ContentRootPath);
 if (!string.IsNullOrWhiteSpace(dbPath))
@@ -963,6 +966,32 @@ static string? GetSqlitePath(string connectionString, string contentRootPath)
     return Path.IsPathRooted(path)
         ? path
         : Path.GetFullPath(path, contentRootPath);
+}
+
+static string NormalizeSqliteConnectionString(string connectionString, string contentRootPath)
+{
+    const string prefix = "Data Source=";
+    var parts = connectionString.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+    var updated = false;
+
+    for (var index = 0; index < parts.Length; index++)
+    {
+        if (!parts[index].StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+        {
+            continue;
+        }
+
+        var path = parts[index][prefix.Length..];
+        if (string.IsNullOrWhiteSpace(path) || Path.IsPathRooted(path))
+        {
+            continue;
+        }
+
+        parts[index] = $"{prefix}{Path.GetFullPath(path, contentRootPath)}";
+        updated = true;
+    }
+
+    return updated ? string.Join(';', parts) : connectionString;
 }
 
 static IReadOnlyList<AuditLogRecord> BuildBrokerConnectionAudit(BrokerConnectionTestResult result)
