@@ -1,7 +1,68 @@
 const { Client, LocalAuth } = require('whatsapp-web.js');
+const fs = require('fs');
+const path = require('path');
 const qrcode = require('qrcode-terminal');
 const { validateTradingSignal, getDefaultTargetAllocation } = require('./src/trading-signal');
 const { submitTradingSignal, getTradingEngineBaseUrl } = require('./src/trading-engine-client');
+
+const LOG_DIRECTORY = path.join(__dirname, 'logs');
+
+function logEvent(event, details = {}) {
+    const record = {
+        timestamp: new Date().toISOString(),
+        event,
+        ...details
+    };
+
+    appendJsonLine(record);
+}
+
+function appendJsonLine(record) {
+    try {
+        fs.mkdirSync(LOG_DIRECTORY, { recursive: true });
+        fs.appendFileSync(getDailyLogFile(), `${JSON.stringify(record)}\n`, 'utf8');
+    } catch (error) {
+        console.error('Failed writing WhatsApp log file:', error.message);
+    }
+}
+
+function getDailyLogFile(date = new Date()) {
+    const pad = (value) => String(value).padStart(2, '0');
+    const datePart = `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+    return path.join(LOG_DIRECTORY, `whatsapp-${datePart}.log`);
+}
+
+async function logTraffic(msg) {
+    try {
+        const [chat, contact] = await Promise.all([
+            msg.getChat().catch(() => null),
+            msg.getContact().catch(() => null)
+        ]);
+
+        appendJsonLine({
+            timestamp: new Date().toISOString(),
+            event: 'whatsapp.traffic',
+            whatsapp_timestamp: msg.timestamp ? new Date(msg.timestamp * 1000).toISOString() : null,
+            direction: msg.fromMe ? 'outgoing' : 'incoming',
+            from: msg.from,
+            to: msg.to,
+            author: msg.author || null,
+            chat_id: chat?.id?._serialized || msg.from,
+            chat_name: chat?.name || null,
+            is_group: Boolean(chat?.isGroup),
+            contact_id: contact?.id?._serialized || null,
+            contact_name: contact?.pushname || contact?.name || contact?.number || null,
+            type: msg.type,
+            has_media: Boolean(msg.hasMedia),
+            body: msg.body || ''
+        });
+    } catch (error) {
+        logEvent('traffic.log_failed', {
+            message: error.message,
+            stack: error.stack
+        });
+    }
+}
 
 // פונקציה שמסדרת את כיוון העברית לקונסול
 function fixHebrew(text) {
@@ -86,6 +147,10 @@ const TARGET_ID = '972546507978@c.us';
 console.log(fixHebrew('מפעיל את הדפדפן ברקע, אנא המתן מספר שניות...'));
 
 console.log(`[i] Trading Engine URL: ${getTradingEngineBaseUrl()}`);
+logEvent('listener.starting', {
+    trading_engine_url: getTradingEngineBaseUrl(),
+    target_id: TARGET_ID || null
+});
 
 const client = new Client({
     authStrategy: new LocalAuth(),
@@ -104,6 +169,7 @@ const client = new Client({
 });
 
 client.on('qr', (qr) => {
+    logEvent('whatsapp.qr_received');
     console.log('\n======================================================');
     console.log(fixHebrew('סרוק את קוד ה-QR הבא באמצעות האפליקציה בטלפון:'));
     console.log('======================================================\n');
@@ -111,6 +177,7 @@ client.on('qr', (qr) => {
 });
 
 client.on('ready', () => {
+    logEvent('whatsapp.ready');
     console.log('\n======================================================');
     console.log(fixHebrew('הבוט מחובר ומוכן לפענח אותות מסחר בקבוצה!'));
     console.log('======================================================\n');
@@ -118,13 +185,28 @@ client.on('ready', () => {
 
 client.on('message_create', async (msg) => {
     try {
+        await logTraffic(msg);
+
         if (TARGET_ID && msg.from !== TARGET_ID) return;
 
         if (msg.body.includes('כניסה לעסקה') || msg.body.includes('הקסעל הסינכ')) {
+            logEvent('signal.message_detected', {
+                from: msg.from,
+                to: msg.to,
+                author: msg.author || null,
+                message_type: msg.type,
+                body_length: msg.body.length
+            });
+
             const tradingDataJSON = parseSignalToJSON(msg.body);
             const validation = validateTradingSignal(tradingDataJSON);
 
             if (!validation.ok) {
+                logEvent('signal.invalid', {
+                    signal: validation.signal,
+                    errors: validation.errors
+                });
+
                 console.log(`\n====================================`);
                 console.log(`[!] INVALID TRADING SIGNAL:`);
                 console.log(`====================================`);
@@ -136,6 +218,10 @@ client.on('message_create', async (msg) => {
             }
 
             const targetAllocation = getDefaultTargetAllocation(validation.signal.contracts);
+            logEvent('signal.valid', {
+                signal: validation.signal,
+                target_allocation: targetAllocation
+            });
 
             console.log(`\n====================================`);
             console.log(`[+] DETECTED TRADING SIGNAL JSON:`);
@@ -146,6 +232,11 @@ client.on('message_create', async (msg) => {
             console.log(`====================================\n`);
 
             const savedSignal = await submitTradingSignal(validation.signal);
+            logEvent('signal.sent_to_trading_engine', {
+                signal_id: savedSignal?.id ?? null,
+                status: savedSignal?.status ?? null,
+                symbol: savedSignal?.symbol ?? validation.signal.symbol
+            });
 
             console.log(`\n====================================`);
             console.log(`[+] SIGNAL SENT TO TRADING ENGINE:`);
@@ -155,6 +246,10 @@ client.on('message_create', async (msg) => {
         }
 
     } catch (error) {
+        logEvent('listener.error', {
+            message: error.message,
+            stack: error.stack
+        });
         console.error('Error parsing trading message:', error);
     }
 });
