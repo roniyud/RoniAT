@@ -1,0 +1,34 @@
+Chrome
+Notrpad++
+VsCode
+	Project manager
+	Codex
+GIT
+	winget install --id Git.Git -e --source winget
+.NET 10.0 Desktop Runtime (v10.0.8) - Windows x64 Installer	
+GitExtension
+winget install -e --id Microsoft.DotNet.SDK.8
+winget install -e --id OpenJS.NodeJS.LTS
+
+cd C:\RONI\RoniAT\apps\trading-dashboard
+npm install
+npm run build
+
+cd C:\RONI\RoniAT\apps\whatsapp-listener
+npm install
+
+cd C:\RONI\RoniAT\services\trading-engine
+dotnet restore
+dotnet build
+
+C:\RONI\RoniAT\services\trading-engine\storage\
+risk-settings.json
+broker-settings.json
+
+cd C:\RONI\RoniAT
+Copy-Item .\scripts\start-roniat.example.ps1 .\scripts\start-roniat.local.ps1 -Force
+
+IBKR
+
+cd C:\RONI\RoniAT
+.\scripts\start-roniat.local.ps1 -RestartTradingEngine -WithWhatsApp -PublicDashboard

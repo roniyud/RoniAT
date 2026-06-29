@@ -81,6 +81,24 @@ Invoke-WebRequest https://roniyud.com/health
 
 ## Update Existing Service After Code Changes
 
+Recommended full republish command:
+
+```powershell
+cd C:\RONI\RoniAT
+.\scripts\republish-roniat.ps1
+```
+
+What the full republish script does:
+
+1. Checks the repo paths and warns if PowerShell is not running as Administrator.
+2. Stops `RoniAT-TradingEngine` so port `3001` is free and old files are not in use.
+3. Builds the Vue dashboard into `apps/trading-dashboard/dist`.
+4. Publishes the Trading Engine into `publish/trading-engine`.
+5. Updates the Windows service command so it points to the latest publish folder and correct content root.
+6. Starts `RoniAT-TradingEngine`.
+7. Checks `http://localhost:3001/health`.
+8. Checks `https://roniyud.com/health` through Cloudflare.
+
 If you changed backend code:
 
 ```powershell
@@ -144,6 +162,93 @@ dotnet publish .\services\trading-engine\trading-engine.csproj `
   -o C:\RONI\RoniAT\publish\trading-engine
 
 sc.exe start RoniAT-TradingEngine
+```
+
+## WhatsApp Scheduled Task
+
+WhatsApp Listener is not installed as a normal Windows service. It is better to run it as an interactive Scheduled Task because WhatsApp Web may need the Administrator user session, Chrome profile, and QR/login state.
+
+The task name is:
+
+```text
+RoniAT-WhatsApp
+```
+
+It runs this command at Administrator logon:
+
+```powershell
+powershell.exe -NoExit -ExecutionPolicy Bypass -File "C:\RONI\RoniAT\scripts\start-whatsapp-task.ps1" -RestartExisting
+```
+
+The script does:
+
+1. Stops any existing WhatsApp Listener process.
+2. Reads `DashboardAuth__Username` and `DashboardAuth__Password` from Machine environment variables.
+3. Sets `TRADING_ENGINE_URL=http://localhost:3001`.
+4. Sets `TRADING_ENGINE_USERNAME` and `TRADING_ENGINE_PASSWORD`.
+5. Runs `npm start` inside `apps/whatsapp-listener`.
+
+Create or recreate the task:
+
+```powershell
+$taskName = "RoniAT-WhatsApp"
+$repo = "C:\RONI\RoniAT"
+$script = Join-Path $repo "scripts\start-whatsapp-task.ps1"
+$args = "-NoExit -ExecutionPolicy Bypass -File `"$script`" -RestartExisting"
+
+$action = New-ScheduledTaskAction `
+  -Execute "powershell.exe" `
+  -Argument $args `
+  -WorkingDirectory $repo
+
+$trigger = New-ScheduledTaskTrigger -AtLogOn -User "Administrator"
+
+$settings = New-ScheduledTaskSettingsSet `
+  -AllowStartIfOnBatteries `
+  -DontStopIfGoingOnBatteries `
+  -ExecutionTimeLimit ([TimeSpan]::Zero) `
+  -MultipleInstances IgnoreNew `
+  -RestartCount 3 `
+  -RestartInterval (New-TimeSpan -Minutes 1)
+
+$principal = New-ScheduledTaskPrincipal `
+  -UserId "Administrator" `
+  -LogonType Interactive `
+  -RunLevel Highest
+
+Register-ScheduledTask `
+  -TaskName $taskName `
+  -Action $action `
+  -Trigger $trigger `
+  -Settings $settings `
+  -Principal $principal `
+  -Description "Start RoniAT WhatsApp Listener at Administrator logon" `
+  -Force
+```
+
+Check task:
+
+```powershell
+Get-ScheduledTask -TaskName RoniAT-WhatsApp
+Get-ScheduledTaskInfo -TaskName RoniAT-WhatsApp
+```
+
+Run it now:
+
+```powershell
+Start-ScheduledTask -TaskName RoniAT-WhatsApp
+```
+
+Stop it:
+
+```powershell
+Stop-ScheduledTask -TaskName RoniAT-WhatsApp
+```
+
+Delete it:
+
+```powershell
+Unregister-ScheduledTask -TaskName RoniAT-WhatsApp -Confirm:$false
 ```
 
 ## Cloudflare Tunnel
@@ -210,4 +315,3 @@ After changing these values, restart the service:
 sc.exe stop RoniAT-TradingEngine
 sc.exe start RoniAT-TradingEngine
 ```
-

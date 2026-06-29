@@ -15,7 +15,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\..\IB\TWS API\source\CSharpClient\client\CSharpAPI.csproj" />
+    <ProjectReference Include="..\..\vendor\ibkr\CSharpClient\client\CSharpAPI.csproj" />
   </ItemGroup>
 
 </Project>
