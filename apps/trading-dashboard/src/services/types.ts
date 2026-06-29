@@ -195,6 +195,7 @@ export type RiskSettings = {
   test_mode: boolean
   ignore_tp2: boolean
   enable_auto_trading: boolean
+  require_signal_approval: boolean
   reject_duplicate_signals: boolean
   duplicate_window_seconds: number
   allow_position_stacking: boolean

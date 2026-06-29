@@ -12,16 +12,12 @@ async function submitTradingSignal(signal) {
     const timeout = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
 
     try {
-        const token = await getTradingEngineToken();
-        const response = await fetch(`${getTradingEngineBaseUrl()}/api/signals`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                ...(token ? { Authorization: `Bearer ${token}` } : {})
-            },
-            body: JSON.stringify(signal),
-            signal: controller.signal
-        });
+        let response = await postTradingSignal(signal, controller.signal);
+
+        if (response.status === 401) {
+            clearTradingEngineToken();
+            response = await postTradingSignal(signal, controller.signal);
+        }
 
         const bodyText = await response.text();
         const body = parseJsonBody(bodyText);
@@ -41,6 +37,19 @@ async function submitTradingSignal(signal) {
     } finally {
         clearTimeout(timeout);
     }
+}
+
+async function postTradingSignal(signal, abortSignal) {
+    const token = await getTradingEngineToken();
+    return fetch(`${getTradingEngineBaseUrl()}/api/signals`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            ...(token ? { Authorization: `Bearer ${token}` } : {})
+        },
+        body: JSON.stringify(signal),
+        signal: abortSignal
+    });
 }
 
 async function getTradingEngineToken() {
@@ -70,6 +79,11 @@ async function getTradingEngineToken() {
     authToken = body.token;
     authTokenExpiresAt = body.expires_at ? Date.parse(body.expires_at) : Date.now() + (11 * 60 * 60 * 1000);
     return authToken;
+}
+
+function clearTradingEngineToken() {
+    authToken = null;
+    authTokenExpiresAt = 0;
 }
 
 function parseJsonBody(bodyText) {

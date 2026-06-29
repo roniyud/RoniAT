@@ -11,6 +11,7 @@ public sealed class RiskSettings
     public bool TestMode { get; set; } = false;
     public bool IgnoreTakeProfit2 { get; set; } = true;
     public bool EnableAutoTrading { get; set; } = true;
+    public bool RequireSignalApproval { get; set; } = true;
     public bool RejectDuplicateSignals { get; set; } = true;
     public int DuplicateWindowSeconds { get; set; } = 120;
     public bool AllowPositionStacking { get; set; } = false;

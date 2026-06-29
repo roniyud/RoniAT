@@ -72,6 +72,8 @@ public sealed class RiskValidator(RiskSettingsStore settingsStore)
             var duplicate = recentSignals.Any(candidate =>
                 candidate.CreatedAt >= cutoff &&
                 candidate.Status != "rejected_by_risk" &&
+                candidate.Status != "pending_approval" &&
+                candidate.Status != "approval_rejected" &&
                 candidate.Type == signal.Type &&
                 candidate.Direction == signal.Direction &&
                 candidate.Symbol == signal.Symbol &&

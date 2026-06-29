@@ -90,6 +90,38 @@ export async function getSignals() {
   return normalizeCollection<TradingSignal>(await request<TradingSignal[] | { value: TradingSignal[] }>('/api/signals'))
 }
 
+export async function approveSignal(id: number) {
+  const response = await fetch(`${API_BASE_URL}/api/signals/${id}/approve`, {
+    method: 'POST',
+    headers: {
+      Accept: 'application/json',
+      ...authHeaders(),
+    },
+  })
+
+  if (!response.ok) {
+    await throwApiError(response)
+  }
+
+  return response.json() as Promise<TradingSignal>
+}
+
+export async function rejectSignal(id: number) {
+  const response = await fetch(`${API_BASE_URL}/api/signals/${id}/reject`, {
+    method: 'POST',
+    headers: {
+      Accept: 'application/json',
+      ...authHeaders(),
+    },
+  })
+
+  if (!response.ok) {
+    await throwApiError(response)
+  }
+
+  return response.json() as Promise<TradingSignal>
+}
+
 export async function getOrders() {
   const orders = normalizeCollection<Record<string, unknown>>(await request<Record<string, unknown>[] | { value: Record<string, unknown>[] }>('/api/orders'))
   return orders.map(mapOrder)

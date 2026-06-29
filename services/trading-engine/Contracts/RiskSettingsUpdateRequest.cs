@@ -12,6 +12,7 @@ public sealed record RiskSettingsUpdateRequest(
     [property: JsonPropertyName("test_mode")] bool TestMode,
     [property: JsonPropertyName("ignore_tp2")] bool IgnoreTakeProfit2,
     [property: JsonPropertyName("enable_auto_trading")] bool EnableAutoTrading,
+    [property: JsonPropertyName("require_signal_approval")] bool RequireSignalApproval,
     [property: JsonPropertyName("reject_duplicate_signals")] bool RejectDuplicateSignals,
     [property: JsonPropertyName("duplicate_window_seconds")] int DuplicateWindowSeconds,
     [property: JsonPropertyName("allow_position_stacking")] bool AllowPositionStacking,

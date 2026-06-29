@@ -15,9 +15,11 @@ import {
   Settings2,
   ShieldCheck,
   WifiOff,
+  XCircle,
 } from '@lucide/vue'
 import CandlestickChart from './components/CandlestickChart.vue'
 import {
+  approveSignal,
   cancelWorkingOrders,
   closePosition,
   emergencyStop,
@@ -40,6 +42,7 @@ import {
   onAuthExpired,
   refreshTastytradeAccessToken,
   resumeTrading,
+  rejectSignal,
   startTastytradeOAuth,
   submitMarketOrder,
   submitManualTrade,
@@ -178,6 +181,12 @@ const availableChartSymbols = computed(() => {
   if (!symbols.size) symbols.add(chartSymbol.value)
   return [...symbols].sort()
 })
+const pendingChartSignal = computed(() =>
+  signals.value.find((signal) =>
+    signal.status === 'pending_approval' &&
+    normalizeSymbol(signal.symbol) === chartSymbol.value,
+  ) ?? null
+)
 const chartLevels = computed(() => {
   const symbol = chartSymbol.value
   const levels: { id: string; label: string; price: number; color: string; draggable?: 'stop_loss' | 'take_profit'; style?: 'solid' | 'dashed' | 'dotted' }[] = []
@@ -218,6 +227,30 @@ const chartLevels = computed(() => {
       price,
       color: '#b45309',
       style: 'dashed',
+    })
+  }
+
+  if (pendingChartSignal.value) {
+    levels.push({
+      id: `pending-${pendingChartSignal.value.id}-entry`,
+      label: 'Pending Entry',
+      price: pendingChartSignal.value.entry_price,
+      color: '#475467',
+      style: 'dashed',
+    })
+    levels.push({
+      id: `pending-${pendingChartSignal.value.id}-sl`,
+      label: 'Pending SL',
+      price: pendingChartSignal.value.stop_loss,
+      color: '#b42318',
+      style: 'dotted',
+    })
+    levels.push({
+      id: `pending-${pendingChartSignal.value.id}-tp`,
+      label: 'Pending TP',
+      price: pendingChartSignal.value.take_profit_1,
+      color: '#13795b',
+      style: 'dotted',
     })
   }
 
@@ -535,6 +568,22 @@ async function handleCancelWorkingOrders(symbol?: string) {
     `Cancel all working broker orders ${label}?`,
     () => cancelWorkingOrders(symbol),
     requireChartTradeConfirmation.value,
+  )
+}
+
+async function handleApproveSignal(signal: TradingSignal) {
+  await runAction(
+    `approve-signal-${signal.id}`,
+    `Approve and execute ${signal.direction} ${signal.contracts} ${signal.symbol}?`,
+    () => approveSignal(signal.id),
+  )
+}
+
+async function handleRejectSignal(signal: TradingSignal) {
+  await runAction(
+    `reject-signal-${signal.id}`,
+    `Reject signal ${signal.id} without execution?`,
+    () => rejectSignal(signal.id),
   )
 }
 
@@ -1311,6 +1360,8 @@ watch(closedPositionsDate, () => {
         :daily-performance="dailyPerformance"
         :error-message="chartError"
         :market-data-warning="chartMarketDataWarning"
+        :pending-approval-signal="pendingChartSignal"
+        :is-signal-action-running="Boolean(activeAction)"
         :is-submitting-trade="isSubmittingTrade"
         :is-loading="isChartLoading"
         :levels="chartLevels"
@@ -1321,7 +1372,9 @@ watch(closedPositionsDate, () => {
         @chart-trade="handleSubmitChartTrade"
         @close-position="handleClosePosition(chartSymbol)"
         @flatten="handleFlatten"
+        @approve-signal="handleApproveSignal"
         @protection-drag="handleProtectionDrag"
+        @reject-signal="handleRejectSignal"
         @require-trade-confirmation-change="requireChartTradeConfirmation = $event"
         @symbol-change="selectedChartSymbol = $event"
         @trade-setting-change="updateChartTradeSetting"
@@ -1419,6 +1472,7 @@ watch(closedPositionsDate, () => {
                 <th>TP1</th>
                 <th>TP2</th>
                 <th>Status</th>
+                <th>Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -1435,6 +1489,29 @@ watch(closedPositionsDate, () => {
                 <td>{{ formatPrice(signal.take_profit_2) }}</td>
                 <td>
                   <span class="status-pill" :class="getStatusClass(signal.status)">{{ signal.status }}</span>
+                </td>
+                <td>
+                  <div v-if="signal.status === 'pending_approval'" class="row-actions">
+                    <button
+                      class="icon-button"
+                      type="button"
+                      title="Approve Signal"
+                      :disabled="Boolean(activeAction)"
+                      @click="handleApproveSignal(signal)"
+                    >
+                      <CheckCircle2 :size="16" />
+                    </button>
+                    <button
+                      class="icon-button danger"
+                      type="button"
+                      title="Reject Signal"
+                      :disabled="Boolean(activeAction)"
+                      @click="handleRejectSignal(signal)"
+                    >
+                      <XCircle :size="16" />
+                    </button>
+                  </div>
+                  <span v-else>-</span>
                 </td>
               </tr>
             </tbody>
@@ -2130,8 +2207,16 @@ watch(closedPositionsDate, () => {
 
           <label class="toggle-row">
             <span>
+              <strong>Require Signal Approval</strong>
+              <small>{{ riskForm.require_signal_approval ? 'WhatsApp signals wait for approval' : 'WhatsApp signals execute automatically' }}</small>
+            </span>
+            <input v-model="riskForm.require_signal_approval" type="checkbox" />
+          </label>
+
+          <label class="toggle-row">
+            <span>
               <strong>Test Mode</strong>
-              <small>{{ riskForm.test_mode ? 'Signals become market orders with 100 point SL/TP' : 'Disabled' }}</small>
+              <small>{{ riskForm.test_mode ? 'Signals become current-price market orders with 100 point SL/TP' : 'Disabled' }}</small>
             </span>
             <input v-model="riskForm.test_mode" type="checkbox" />
           </label>

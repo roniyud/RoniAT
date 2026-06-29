@@ -10,7 +10,7 @@ import {
   type ISeriesApi,
 } from 'lightweight-charts'
 import { timeframes, type Timeframe } from '../services/market-data'
-import { Activity, BarChart3, BriefcaseBusiness, Send, XCircle } from '@lucide/vue'
+import { Activity, BarChart3, BriefcaseBusiness, CheckCircle2, Send, XCircle } from '@lucide/vue'
 
 type ChartPriceLevel = {
   id: string
@@ -48,6 +48,20 @@ type DailyPerformance = {
   closed_trades: number
 }
 
+type PendingApprovalSignal = {
+  id: number
+  type: 'entry'
+  direction: 'LONG' | 'SHORT'
+  contracts: number
+  entry_price: number
+  stop_loss: number
+  take_profit_1: number
+  take_profit_2: number
+  symbol: string
+  status: string
+  created_at: string
+}
+
 const props = defineProps<{
   activeTrade: ActiveTrade | null
   availableSymbols: string[]
@@ -60,9 +74,11 @@ const props = defineProps<{
   dailyPerformance: DailyPerformance | null
   errorMessage: string
   isSubmittingTrade: boolean
+  isSignalActionRunning: boolean
   isLoading: boolean
   levels: ChartPriceLevel[]
   marketDataWarning: string
+  pendingApprovalSignal: PendingApprovalSignal | null
   requireTradeConfirmation: boolean
   symbol: string
   timeframe: Timeframe
@@ -70,10 +86,12 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   cancelOrders: []
+  approveSignal: [signal: PendingApprovalSignal]
   chartTrade: [direction: 'LONG' | 'SHORT']
   closePosition: []
   flatten: []
   protectionDrag: [field: 'stop_loss' | 'take_profit', price: number]
+  rejectSignal: [signal: PendingApprovalSignal]
   requireTradeConfirmationChange: [value: boolean]
   symbolChange: [symbol: string]
   tradeSettingChange: [field: 'contracts', value: number]
@@ -391,19 +409,23 @@ onUnmounted(() => {
           </datalist>
         </label>
 
-        <div class="timeframe-control" aria-label="Timeframe">
-          <button
-            v-for="item in timeframes"
-            :key="item"
-            type="button"
-            :class="{ active: item === timeframe }"
-            @click="setTimeframe(item)"
-          >
-            {{ item }}
-          </button>
-        </div>
       </div>
     </header>
+
+    <section class="daily-performance-strip">
+      <div>
+        <span>Daily P&L</span>
+        <strong :class="dailyPnlClass">{{ formatCurrency(dailyPerformance?.realized_pnl) }}</strong>
+      </div>
+      <div>
+        <span>Closed Trades</span>
+        <strong>{{ dailyPerformance?.closed_trades ?? 0 }}</strong>
+      </div>
+      <div>
+        <span>Date</span>
+        <strong>{{ dailyPerformance?.date ?? '-' }}</strong>
+      </div>
+    </section>
 
     <section class="active-trade" :class="activeTrade ? activeTrade.direction.toLowerCase() : 'empty'">
       <div class="active-trade-main">
@@ -453,18 +475,46 @@ onUnmounted(() => {
       </div>
     </section>
 
-    <section class="daily-performance-strip">
-      <div>
-        <span>Daily P&L</span>
-        <strong :class="dailyPnlClass">{{ formatCurrency(dailyPerformance?.realized_pnl) }}</strong>
+    <section v-if="pendingApprovalSignal" class="pending-signal-panel">
+      <div class="pending-signal-main">
+        <span>Pending Signal</span>
+        <strong>
+          {{ pendingApprovalSignal.direction }} {{ pendingApprovalSignal.contracts }} {{ pendingApprovalSignal.symbol }}
+        </strong>
       </div>
-      <div>
-        <span>Closed Trades</span>
-        <strong>{{ dailyPerformance?.closed_trades ?? 0 }}</strong>
+      <div class="pending-signal-details">
+        <div>
+          <span>Entry</span>
+          <strong>{{ formatPrice(pendingApprovalSignal.entry_price) }}</strong>
+        </div>
+        <div>
+          <span>SL</span>
+          <strong>{{ formatPrice(pendingApprovalSignal.stop_loss) }}</strong>
+        </div>
+        <div>
+          <span>TP</span>
+          <strong>{{ formatPrice(pendingApprovalSignal.take_profit_1) }}</strong>
+        </div>
       </div>
-      <div>
-        <span>Date</span>
-        <strong>{{ dailyPerformance?.date ?? '-' }}</strong>
+      <div class="pending-signal-actions">
+        <button
+          class="chart-trade-button buy"
+          type="button"
+          :disabled="isSignalActionRunning"
+          @click="emit('approveSignal', pendingApprovalSignal)"
+        >
+          <CheckCircle2 :size="16" />
+          <span>Approve</span>
+        </button>
+        <button
+          class="chart-trade-button danger"
+          type="button"
+          :disabled="isSignalActionRunning"
+          @click="emit('rejectSignal', pendingApprovalSignal)"
+        >
+          <XCircle :size="16" />
+          <span>Reject</span>
+        </button>
       </div>
     </section>
 
@@ -472,9 +522,8 @@ onUnmounted(() => {
       <div class="chart-trade-header">
         <div>
           <span>Chart Trade</span>
-          <strong>{{ formattedSymbol }}</strong>
         </div>
-        <small>{{ chartTradeBlockedReason || chartTradeMessage || 'Ready' }}</small>
+        <small v-if="chartTradeBlockedReason || chartTradeMessage">{{ chartTradeBlockedReason || chartTradeMessage }}</small>
       </div>
 
       <div class="chart-trade-inputs">
@@ -550,12 +599,18 @@ onUnmounted(() => {
       </div>
     </section>
 
-    <div v-if="levels.length" class="chart-levels" aria-label="Chart levels">
-      <span v-for="level in levels" :key="level.id" class="level-chip">
-        <i :style="{ backgroundColor: level.color }" />
-        {{ level.label }}
-        <strong>{{ level.price.toFixed(2) }}</strong>
-      </span>
+    <div class="chart-timeframe-bar">
+      <div class="timeframe-control" aria-label="Timeframe">
+        <button
+          v-for="item in timeframes"
+          :key="item"
+          type="button"
+          :class="{ active: item === timeframe }"
+          @click="setTimeframe(item)"
+        >
+          {{ item }}
+        </button>
+      </div>
     </div>
 
     <div class="chart-body">

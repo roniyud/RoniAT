@@ -190,6 +190,23 @@ h3 {
   opacity: 0.72;
 }
 
+.icon-button.danger {
+  color: #9f1d1d;
+  border-color: #f1bbbb;
+  background: #fff4f2;
+}
+
+.row-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.row-actions .icon-button {
+  width: 34px;
+  height: 34px;
+}
+
 .spinning {
   animation: spin 0.9s linear infinite;
 }
@@ -428,7 +445,7 @@ h3 {
 
 .chart-tools {
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   gap: 10px;
   flex-wrap: wrap;
   justify-content: flex-end;
@@ -483,6 +500,14 @@ h3 {
   color: #102321;
   background: #ffffff;
   box-shadow: 0 1px 4px rgba(28, 35, 38, 0.1);
+}
+
+.chart-timeframe-bar {
+  display: flex;
+  justify-content: flex-end;
+  padding: 8px 12px;
+  border-bottom: 1px solid #edf0f2;
+  background: #fbfcfc;
 }
 
 .active-trade {
@@ -620,6 +645,53 @@ td strong.negative {
   color: #b42318;
 }
 
+.pending-signal-panel {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.9fr) minmax(0, 1.5fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  border-bottom: 1px solid #eadb9f;
+  background: #fffdf0;
+}
+
+.pending-signal-main span,
+.pending-signal-details span {
+  display: block;
+  color: #8a6d1f;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.pending-signal-main strong {
+  display: flex;
+  margin-top: 4px;
+  color: #181a1b;
+  font-size: 18px;
+}
+
+.pending-signal-details {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.pending-signal-details strong {
+  display: block;
+  overflow: hidden;
+  margin-top: 4px;
+  color: #181a1b;
+  font-size: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pending-signal-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(90px, 1fr));
+  gap: 8px;
+}
+
 .chart-trade-panel {
   display: grid;
   grid-template-columns: minmax(150px, 0.8fr) minmax(120px, 0.6fr) minmax(320px, 1.8fr);
@@ -738,41 +810,6 @@ td strong.negative {
 .chart-surface.dragging-protection,
 .chart-surface.dragging-protection * {
   cursor: ns-resize !important;
-}
-
-.chart-levels {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-  padding: 10px 16px;
-  border-bottom: 1px solid #edf0f2;
-  background: #fafbfb;
-}
-
-.level-chip {
-  display: inline-flex;
-  align-items: center;
-  min-height: 30px;
-  gap: 7px;
-  border: 1px solid #dfe5e7;
-  border-radius: 8px;
-  padding: 5px 9px;
-  color: #4b5563;
-  background: #ffffff;
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.level-chip i {
-  width: 9px;
-  height: 9px;
-  border-radius: 999px;
-  flex: 0 0 auto;
-}
-
-.level-chip strong {
-  color: #181a1b;
-  font-size: 12px;
 }
 
 .chart-surface {
@@ -1649,6 +1686,14 @@ tr:last-child td {
     justify-content: stretch;
   }
 
+  .pending-signal-panel {
+    grid-template-columns: 1fr;
+  }
+
+  .pending-signal-actions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .chart-symbol-field,
   .chart-symbol-field input,
   .timeframe-control {
@@ -1737,10 +1782,6 @@ tr:last-child td {
     border-right: 0;
   }
 
-  .chart-levels {
-    padding: 8px 10px;
-  }
-
   .active-trade {
     padding: 10px;
   }
@@ -1763,11 +1804,6 @@ tr:last-child td {
 
   .chart-trade-button.danger {
     grid-column: 1 / -1;
-  }
-
-  .level-chip {
-    flex: 1 1 calc(50% - 8px);
-    justify-content: space-between;
   }
 
   .chart-surface {
