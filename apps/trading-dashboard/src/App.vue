@@ -106,6 +106,16 @@ let isChartRefreshInFlight = false
 let realtimeClient: ReturnType<typeof createTradingRealtimeClient> | undefined
 let removeAuthExpiredListener: (() => void) | undefined
 
+const tradingDayTimeZones = [
+  { id: 'Israel Standard Time', label: 'Israel (Jerusalem)' },
+  { id: 'UTC', label: 'UTC' },
+  { id: 'Eastern Standard Time', label: 'US Eastern (New York)' },
+  { id: 'Central Standard Time', label: 'US Central (Chicago)' },
+  { id: 'Pacific Standard Time', label: 'US Pacific (Los Angeles)' },
+  { id: 'GMT Standard Time', label: 'UK (London)' },
+  { id: 'W. Europe Standard Time', label: 'Central Europe' },
+]
+
 const totalOpenQuantity = computed(() => positions.value.reduce((total, position) => total + Math.abs(position.quantity), 0))
 const workingOrders = computed(() => orders.value.filter((order) => order.status === 'working'))
 const workingOrderCount = computed(() => workingOrders.value.length)
@@ -2301,6 +2311,14 @@ watch(closedPositionsDate, () => {
             <label>
               <span>Max Daily Loss</span>
               <input v-model.number="riskForm.max_daily_loss" type="number" min="0" step="1" />
+            </label>
+            <label>
+              <span>Trading Day Time Zone</span>
+              <select v-model="riskForm.trading_day_time_zone_id">
+                <option v-for="timeZone in tradingDayTimeZones" :key="timeZone.id" :value="timeZone.id">
+                  {{ timeZone.label }}
+                </option>
+              </select>
             </label>
             <label>
               <span>Max Entry Distance Points</span>

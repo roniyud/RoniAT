@@ -5,6 +5,7 @@ public sealed class RiskSettings
     public int MaxContractsPerSignal { get; set; } = 7;
     public decimal MaxLossPerTrade { get; set; } = 0;
     public decimal MaxDailyLoss { get; set; } = 0;
+    public string TradingDayTimeZoneId { get; set; } = "Israel Standard Time";
     public decimal MaxEntryPriceDeviationPoints { get; set; } = 0;
     public decimal ChartMarketProtectionDistancePoints { get; set; } = 100;
     public string[] AllowedSymbols { get; set; } = [];

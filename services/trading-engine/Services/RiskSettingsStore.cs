@@ -60,7 +60,8 @@ public sealed class RiskSettingsStore
         try
         {
             var loaded = JsonSerializer.Deserialize<RiskSettings>(File.ReadAllText(filePath), JsonOptions);
-            return Normalize(loaded ?? defaults);
+            var normalized = Normalize(loaded ?? defaults);
+            return Validate(normalized).Count == 0 ? normalized : Normalize(defaults);
         }
         catch (JsonException)
         {
@@ -86,6 +87,9 @@ public sealed class RiskSettingsStore
             MaxContractsPerSignal = settings.MaxContractsPerSignal,
             MaxLossPerTrade = settings.MaxLossPerTrade,
             MaxDailyLoss = settings.MaxDailyLoss,
+            TradingDayTimeZoneId = string.IsNullOrWhiteSpace(settings.TradingDayTimeZoneId)
+                ? "Israel Standard Time"
+                : settings.TradingDayTimeZoneId.Trim(),
             MaxEntryPriceDeviationPoints = settings.MaxEntryPriceDeviationPoints,
             ChartMarketProtectionDistancePoints = settings.ChartMarketProtectionDistancePoints <= 0 ? 100m : settings.ChartMarketProtectionDistancePoints,
             AllowedSymbols = allowedSymbols,
@@ -124,6 +128,11 @@ public sealed class RiskSettingsStore
         if (settings.MaxDailyLoss is < 0 or > 1_000_000)
         {
             errors.Add("max_daily_loss must be between 0 and 1000000");
+        }
+
+        if (!IsValidTimeZoneId(settings.TradingDayTimeZoneId))
+        {
+            errors.Add($"trading_day_time_zone_id must be a valid Windows time zone id. Current value: {settings.TradingDayTimeZoneId}");
         }
 
         if (settings.MaxEntryPriceDeviationPoints is < 0 or > 10_000)
@@ -171,6 +180,7 @@ public sealed class RiskSettingsStore
             MaxContractsPerSignal = settings.MaxContractsPerSignal,
             MaxLossPerTrade = settings.MaxLossPerTrade,
             MaxDailyLoss = settings.MaxDailyLoss,
+            TradingDayTimeZoneId = settings.TradingDayTimeZoneId,
             MaxEntryPriceDeviationPoints = settings.MaxEntryPriceDeviationPoints,
             ChartMarketProtectionDistancePoints = settings.ChartMarketProtectionDistancePoints,
             AllowedSymbols = settings.AllowedSymbols.ToArray(),
@@ -190,6 +200,23 @@ public sealed class RiskSettingsStore
             StopLossFailsafeConfirmSeconds = settings.StopLossFailsafeConfirmSeconds,
             StopLossFailsafeCooldownSeconds = settings.StopLossFailsafeCooldownSeconds
         };
+    }
+
+    private static bool IsValidTimeZoneId(string timeZoneId)
+    {
+        try
+        {
+            _ = TimeZoneInfo.FindSystemTimeZoneById(timeZoneId);
+            return true;
+        }
+        catch (TimeZoneNotFoundException)
+        {
+            return false;
+        }
+        catch (InvalidTimeZoneException)
+        {
+            return false;
+        }
     }
 }
 

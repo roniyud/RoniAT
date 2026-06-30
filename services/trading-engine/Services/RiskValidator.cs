@@ -114,10 +114,11 @@ public sealed class RiskValidator(RiskSettingsStore settingsStore)
             return;
         }
 
-        var date = DateOnly.FromDateTime(DateTime.Now);
+        var timeZone = GetTradingDayTimeZone(settings);
+        var date = GetTradingDate(DateTimeOffset.UtcNow, timeZone);
         var closedPositions = await db.ClosedPositions.ToListAsync();
         var realizedPnl = closedPositions
-            .Where(position => DateOnly.FromDateTime(position.ClosedAt.LocalDateTime) == date)
+            .Where(position => GetTradingDate(position.ClosedAt, timeZone) == date)
             .Sum(position => position.RealizedPnl ?? 0m);
         var currentLoss = Math.Max(0m, -realizedPnl);
         if (currentLoss >= settings.MaxDailyLoss)
@@ -130,6 +131,16 @@ public sealed class RiskValidator(RiskSettingsStore settingsStore)
         {
             reasons.Add($"Projected daily loss {(currentLoss + projectedLoss):0.##} exceeds max daily loss {settings.MaxDailyLoss:0.##}");
         }
+    }
+
+    private static TimeZoneInfo GetTradingDayTimeZone(RiskSettings settings)
+    {
+        return TimeZoneInfo.FindSystemTimeZoneById(settings.TradingDayTimeZoneId);
+    }
+
+    private static DateOnly GetTradingDate(DateTimeOffset timestamp, TimeZoneInfo timeZone)
+    {
+        return DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(timestamp, timeZone).DateTime);
     }
 }
 

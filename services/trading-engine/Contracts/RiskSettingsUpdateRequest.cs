@@ -6,6 +6,7 @@ public sealed record RiskSettingsUpdateRequest(
     [property: JsonPropertyName("max_contracts_per_signal")] int MaxContractsPerSignal,
     [property: JsonPropertyName("max_loss_per_trade")] decimal MaxLossPerTrade,
     [property: JsonPropertyName("max_daily_loss")] decimal MaxDailyLoss,
+    [property: JsonPropertyName("trading_day_time_zone_id")] string TradingDayTimeZoneId,
     [property: JsonPropertyName("max_entry_price_deviation_points")] decimal MaxEntryPriceDeviationPoints,
     [property: JsonPropertyName("chart_market_protection_distance_points")] decimal ChartMarketProtectionDistancePoints,
     [property: JsonPropertyName("allowed_symbols")] IReadOnlyList<string> AllowedSymbols,

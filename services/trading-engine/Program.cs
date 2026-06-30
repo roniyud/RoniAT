@@ -426,12 +426,13 @@ app.MapGet("/api/positions", async (TradingDbContext db, BrokerSettingsStore bro
 .WithName("GetPositions")
 .WithOpenApi();
 
-app.MapGet("/api/positions/closed", async (string? date, TradingDbContext db) =>
+app.MapGet("/api/positions/closed", async (string? date, TradingDbContext db, RiskSettingsStore riskSettingsStore) =>
 {
-    var filterDate = ParseDateOnly(date) ?? DateOnly.FromDateTime(DateTime.Now);
+    var timeZone = GetTradingDayTimeZone(riskSettingsStore.Get());
+    var filterDate = ParseDateOnly(date) ?? GetTradingDate(DateTimeOffset.UtcNow, timeZone);
 
     var closedPositions = (await db.ClosedPositions.ToListAsync())
-        .Where(position => DateOnly.FromDateTime(position.ClosedAt.LocalDateTime) == filterDate)
+        .Where(position => GetTradingDate(position.ClosedAt, timeZone) == filterDate)
         .OrderByDescending(position => position.ClosedAt)
         .Take(500)
         .ToList();
@@ -454,9 +455,10 @@ app.MapGet("/api/audit-logs", async (TradingDbContext db) =>
 .WithName("GetAuditLogs")
 .WithOpenApi();
 
-app.MapGet("/api/performance/daily", async (TradingDbContext db) =>
+app.MapGet("/api/performance/daily", async (TradingDbContext db, RiskSettingsStore riskSettingsStore) =>
 {
-    var snapshot = await GetDailyPerformanceAsync(db, DateOnly.FromDateTime(DateTime.Now));
+    var timeZone = GetTradingDayTimeZone(riskSettingsStore.Get());
+    var snapshot = await GetDailyPerformanceAsync(db, GetTradingDate(DateTimeOffset.UtcNow, timeZone), timeZone);
     return Results.Ok(new
     {
         date = snapshot.Date.ToString("yyyy-MM-dd"),
@@ -801,6 +803,7 @@ app.MapPut("/api/risk/settings", async (RiskSettingsUpdateRequest request, RiskS
         MaxContractsPerSignal = request.MaxContractsPerSignal,
         MaxLossPerTrade = request.MaxLossPerTrade,
         MaxDailyLoss = request.MaxDailyLoss,
+        TradingDayTimeZoneId = request.TradingDayTimeZoneId,
         MaxEntryPriceDeviationPoints = request.MaxEntryPriceDeviationPoints,
         ChartMarketProtectionDistancePoints = request.ChartMarketProtectionDistancePoints,
         AllowedSymbols = request.AllowedSymbols.ToArray(),
@@ -1428,7 +1431,8 @@ static async Task<MarketOrderValidationResult> ValidateMarketOrderAsync(MarketOr
     if (settings.MaxDailyLoss > 0 && request.AttachProtection == true && request.ProtectionDistance is > 0 && contracts is > 0 && !string.IsNullOrWhiteSpace(symbol))
     {
         var projectedLoss = request.ProtectionDistance.Value * contracts.Value * GetPointValue(symbol);
-        var today = await GetDailyPerformanceAsync(db, DateOnly.FromDateTime(DateTime.Now));
+        var timeZone = GetTradingDayTimeZone(settings);
+        var today = await GetDailyPerformanceAsync(db, GetTradingDate(DateTimeOffset.UtcNow, timeZone), timeZone);
         var currentLoss = Math.Max(0m, -today.RealizedPnl);
         if (currentLoss >= settings.MaxDailyLoss)
         {
@@ -1456,17 +1460,27 @@ static decimal GetPointValue(string symbol)
     };
 }
 
-static async Task<DailyPerformanceSnapshot> GetDailyPerformanceAsync(TradingDbContext db, DateOnly date)
+static async Task<DailyPerformanceSnapshot> GetDailyPerformanceAsync(TradingDbContext db, DateOnly date, TimeZoneInfo timeZone)
 {
     var closedPositions = await db.ClosedPositions.ToListAsync();
     var todayClosedPositions = closedPositions
-        .Where(position => DateOnly.FromDateTime(position.ClosedAt.LocalDateTime) == date)
+        .Where(position => GetTradingDate(position.ClosedAt, timeZone) == date)
         .ToList();
 
     return new DailyPerformanceSnapshot(
         date,
         todayClosedPositions.Sum(position => position.RealizedPnl ?? 0m),
         todayClosedPositions.Count);
+}
+
+static TimeZoneInfo GetTradingDayTimeZone(RiskSettings settings)
+{
+    return TimeZoneInfo.FindSystemTimeZoneById(settings.TradingDayTimeZoneId);
+}
+
+static DateOnly GetTradingDate(DateTimeOffset timestamp, TimeZoneInfo timeZone)
+{
+    return DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(timestamp, timeZone).DateTime);
 }
 
 static async Task<IResult> ProcessSignalAsync(TradingSignalRequest request, bool isManualTrade, TradingDbContext db, IBrokerAdapter brokerAdapter, RiskValidator riskValidator, RiskSettingsStore riskSettingsStore, IMarketDataProvider marketDataProvider, IHubContext<TradingHub> hub)
