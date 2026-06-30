@@ -1,11 +1,85 @@
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const fs = require('fs');
+const http = require('http');
 const path = require('path');
 const qrcode = require('qrcode-terminal');
 const { validateTradingSignal, getDefaultTargetAllocation } = require('./src/trading-signal');
 const { submitTradingSignal, getTradingEngineBaseUrl } = require('./src/trading-engine-client');
 
 const LOG_DIRECTORY = path.join(__dirname, 'logs');
+const CONFIG_DIRECTORY = path.join(__dirname, 'config');
+const SETTINGS_FILE = path.join(CONFIG_DIRECTORY, 'settings.json');
+const ADMIN_HOST = process.env.WHATSAPP_ADMIN_HOST || '127.0.0.1';
+const ADMIN_PORT = Number(process.env.WHATSAPP_ADMIN_PORT || 3011);
+
+function ensureSettingsFile() {
+    if (!fs.existsSync(SETTINGS_FILE)) {
+        saveSettings({
+            trackMode: TARGET_ID ? 'specific' : 'all',
+            targetIds: TARGET_ID ? [TARGET_ID] : [],
+            signalChats: []
+        });
+    }
+}
+
+function loadSettings() {
+    try {
+        return normalizeSettings(JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8')));
+    } catch (error) {
+        logEvent('settings.load_failed', {
+            message: error.message
+        });
+        return {
+            trackMode: TARGET_ID ? 'specific' : 'all',
+            targetIds: TARGET_ID ? [TARGET_ID] : [],
+            signalChats: []
+        };
+    }
+}
+
+function saveSettings(settings) {
+    const normalized = normalizeSettings(settings);
+    fs.mkdirSync(CONFIG_DIRECTORY, { recursive: true });
+    fs.writeFileSync(SETTINGS_FILE, JSON.stringify(normalized, null, 2), 'utf8');
+    return normalized;
+}
+
+function normalizeSettings(settings) {
+    const trackMode = String(settings?.trackMode || 'all').trim().toLowerCase();
+    const rawTargetIds = Array.isArray(settings?.targetIds)
+        ? settings.targetIds
+        : String(settings?.targetIds || '').split(',');
+
+    return {
+        trackMode: trackMode === 'specific' ? 'specific' : 'all',
+        targetIds: rawTargetIds.map((value) => String(value).trim()).filter(Boolean),
+        signalChats: normalizeSignalChats(settings?.signalChats)
+    };
+}
+
+function normalizeSignalChats(signalChats) {
+    if (!Array.isArray(signalChats)) {
+        return [];
+    }
+
+    const byId = new Map();
+    for (const chat of signalChats) {
+        const id = String(chat?.id || '').trim();
+        if (!id) continue;
+
+        byId.set(id, {
+            id,
+            name: String(chat?.name || '').trim(),
+            isGroup: Boolean(chat?.isGroup),
+            contactId: String(chat?.contactId || '').trim(),
+            contactName: String(chat?.contactName || '').trim(),
+            lastSignalAt: String(chat?.lastSignalAt || '').trim()
+        });
+    }
+
+    return [...byId.values()]
+        .sort((left, right) => String(right.lastSignalAt || '').localeCompare(String(left.lastSignalAt || '')));
+}
 
 function logEvent(event, details = {}) {
     const record = {
@@ -39,7 +113,7 @@ async function logTraffic(msg) {
             msg.getContact().catch(() => null)
         ]);
 
-        appendJsonLine({
+        const traffic = {
             timestamp: new Date().toISOString(),
             event: 'whatsapp.traffic',
             whatsapp_timestamp: msg.timestamp ? new Date(msg.timestamp * 1000).toISOString() : null,
@@ -55,13 +129,253 @@ async function logTraffic(msg) {
             type: msg.type,
             has_media: Boolean(msg.hasMedia),
             body: msg.body || ''
-        });
+        };
+
+        appendJsonLine(traffic);
+        return traffic;
     } catch (error) {
         logEvent('traffic.log_failed', {
             message: error.message,
             stack: error.stack
         });
+        return null;
     }
+}
+
+function shouldProcessMessage(msg, traffic) {
+    const settings = loadSettings();
+
+    if (settings.trackMode === 'all') {
+        return true;
+    }
+
+    if (settings.targetIds.length === 0) {
+        return false;
+    }
+
+    return settings.targetIds.includes(msg.from)
+        || settings.targetIds.includes(msg.to)
+        || (msg.author && settings.targetIds.includes(msg.author))
+        || (traffic?.chat_id && settings.targetIds.includes(traffic.chat_id))
+        || (traffic?.contact_id && settings.targetIds.includes(traffic.contact_id));
+}
+
+function rememberSignalChat(traffic) {
+    if (!traffic) {
+        return;
+    }
+
+    const settings = loadSettings();
+    if (settings.trackMode !== 'all') {
+        return;
+    }
+
+    const chatId = traffic.chat_id || traffic.from;
+    if (!chatId) {
+        return;
+    }
+
+    const signalChats = settings.signalChats.filter((chat) => chat.id !== chatId);
+    signalChats.unshift({
+        id: chatId,
+        name: traffic.chat_name || '',
+        isGroup: Boolean(traffic.is_group),
+        contactId: traffic.contact_id || '',
+        contactName: traffic.contact_name || '',
+        lastSignalAt: new Date().toISOString()
+    });
+
+    saveSettings({
+        ...settings,
+        signalChats
+    });
+
+    logEvent('settings.signal_chat_remembered', {
+        chat_id: chatId,
+        chat_name: traffic.chat_name || null,
+        is_group: Boolean(traffic.is_group)
+    });
+}
+
+function startSettingsServer() {
+    const server = http.createServer(async (req, res) => {
+        try {
+            if (req.method === 'GET' && req.url === '/') {
+                sendHtml(res, renderSettingsPage(loadSettings()));
+                return;
+            }
+
+            if (req.method === 'GET' && req.url === '/api/settings') {
+                sendJson(res, loadSettings());
+                return;
+            }
+
+            if (req.method === 'POST' && req.url === '/api/settings') {
+                const body = await readRequestBody(req);
+                const saved = saveSettings({
+                    ...loadSettings(),
+                    ...JSON.parse(body || '{}')
+                });
+                logEvent('settings.updated', saved);
+                sendJson(res, saved);
+                return;
+            }
+
+            res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+            res.end('Not found');
+        } catch (error) {
+            res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ error: error.message }));
+        }
+    });
+
+    server.listen(ADMIN_PORT, ADMIN_HOST);
+}
+
+function readRequestBody(req) {
+    return new Promise((resolve, reject) => {
+        let body = '';
+        req.on('data', (chunk) => {
+            body += chunk;
+            if (body.length > 1024 * 1024) {
+                reject(new Error('Request body too large'));
+                req.destroy();
+            }
+        });
+        req.on('end', () => resolve(body));
+        req.on('error', reject);
+    });
+}
+
+function sendJson(res, payload) {
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify(payload));
+}
+
+function sendHtml(res, html) {
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.end(html);
+}
+
+function renderSettingsPage(settings) {
+    const targetIds = escapeHtml(settings.targetIds.join('\n'));
+    const allChecked = settings.trackMode === 'all' ? 'checked' : '';
+    const specificChecked = settings.trackMode === 'specific' ? 'checked' : '';
+    const signalChats = renderSignalChats(settings.signalChats);
+
+    return `<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>RoniAT WhatsApp</title>
+  <style>
+    body { margin: 0; font-family: Arial, sans-serif; background: #f6f8f9; color: #14211f; }
+    main { max-width: 760px; margin: 0 auto; padding: 28px 16px; }
+    section { border: 1px solid #dfe5e7; border-radius: 8px; background: #fff; padding: 18px; }
+    h1 { margin: 0 0 14px; font-size: 24px; }
+    p { color: #60706d; line-height: 1.5; }
+    label { display: block; margin: 14px 0; font-weight: 700; }
+    .option { display: flex; align-items: center; gap: 8px; }
+    textarea { width: 100%; min-height: 150px; box-sizing: border-box; border: 1px solid #cfd8dc; border-radius: 8px; padding: 10px; direction: ltr; font-family: Consolas, monospace; font-size: 14px; }
+    button { height: 40px; border: 0; border-radius: 8px; padding: 0 16px; background: #0f766e; color: #fff; cursor: pointer; font-weight: 800; }
+    .chat-list { display: grid; gap: 8px; margin-top: 18px; }
+    .chat-card { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: center; border: 1px solid #e1e7e9; border-radius: 8px; padding: 10px; direction: ltr; }
+    .chat-card strong { display: block; color: #17211f; direction: rtl; text-align: right; }
+    .chat-card code { display: block; margin-top: 4px; color: #60706d; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .chat-card small { display: block; margin-top: 4px; color: #60706d; direction: rtl; text-align: right; }
+    .chat-card button { height: 34px; background: #344054; }
+    .empty-list { margin-top: 12px; color: #60706d; }
+    .status { min-height: 22px; margin-top: 12px; color: #13795b; font-weight: 700; }
+  </style>
+</head>
+<body>
+  <main>
+    <section>
+      <h1>ניהול WhatsApp Listener</h1>
+      <p>השינויים נשמרים לקובץ ונכנסים לתוקף מיד, בלי אתחול.</p>
+      <form id="settingsForm">
+        <label class="option"><input type="radio" name="trackMode" value="all" ${allChecked}> בדוק בכל הצ'אטים</label>
+        <label class="option"><input type="radio" name="trackMode" value="specific" ${specificChecked}> בדוק רק צ'אטים ספציפיים</label>
+        <label>
+          מזהים ספציפיים, אחד בכל שורה
+          <textarea id="targetIds" placeholder="972546507978@c.us&#10;972799230744-1602684959@g.us">${targetIds}</textarea>
+        </label>
+        <button type="submit">שמור</button>
+        <div id="status" class="status"></div>
+      </form>
+      <div class="chat-list">
+        <h2>צ'אטים שבהם זוהתה כניסה לעסקה</h2>
+        ${signalChats}
+      </div>
+    </section>
+  </main>
+  <script>
+    function addTargetId(id) {
+      const textarea = document.getElementById('targetIds');
+      const values = textarea.value.split(/\\r?\\n|,/).map((value) => value.trim()).filter(Boolean);
+      if (!values.includes(id)) values.push(id);
+      textarea.value = values.join('\\n');
+      document.querySelector('input[name="trackMode"][value="specific"]').checked = true;
+    }
+
+    document.getElementById('settingsForm').addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const trackMode = document.querySelector('input[name="trackMode"]:checked').value;
+      const targetIds = document.getElementById('targetIds').value.split(/\\r?\\n|,/).map((value) => value.trim()).filter(Boolean);
+      const response = await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ trackMode, targetIds })
+      });
+      if (!response.ok) throw new Error(await response.text());
+      const saved = await response.json();
+      document.getElementById('status').textContent = 'נשמר: ' + saved.trackMode + ' (' + saved.targetIds.length + ' מזהים)';
+    });
+  </script>
+</body>
+</html>`;
+}
+
+function renderSignalChats(signalChats) {
+    if (!signalChats.length) {
+        return '<div class="empty-list">עדיין לא זוהו צ׳אטים עם כניסה לעסקה.</div>';
+    }
+
+    return signalChats.map((chat) => {
+        const title = escapeHtml(chat.name || chat.contactName || chat.id);
+        const id = escapeHtml(chat.id);
+        const type = chat.isGroup ? 'קבוצה' : 'איש קשר';
+        const contact = chat.contactName || chat.contactId
+            ? ` / ${escapeHtml(chat.contactName || chat.contactId)}`
+            : '';
+        const lastSignalAt = chat.lastSignalAt
+            ? new Date(chat.lastSignalAt).toLocaleString('he-IL')
+            : '-';
+
+        return `<div class="chat-card">
+          <div>
+            <strong>${title}</strong>
+            <small>ID לשימוש ב-specific</small>
+            <code>${id}</code>
+            <small>${type}${contact} / זוהה לאחרונה: ${escapeHtml(lastSignalAt)}</small>
+          </div>
+          <button type="button" onclick="addTargetId('${escapeAttribute(chat.id)}')">הוסף לספציפי</button>
+        </div>`;
+    }).join('');
+}
+
+function escapeHtml(value) {
+    return String(value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+}
+
+function escapeAttribute(value) {
+    return escapeHtml(value).replace(/`/g, '&#096;');
 }
 
 // פונקציה שמסדרת את כיוון העברית לקונסול
@@ -144,12 +458,16 @@ function parseSignalToJSON(text) {
 const TARGET_ID = '972546507978@c.us';
 // =========================================================================
 
+ensureSettingsFile();
+startSettingsServer();
+
 console.log(fixHebrew('מפעיל את הדפדפן ברקע, אנא המתן מספר שניות...'));
 
 console.log(`[i] Trading Engine URL: ${getTradingEngineBaseUrl()}`);
+console.log(`[i] WhatsApp settings page: http://${ADMIN_HOST}:${ADMIN_PORT}`);
 logEvent('listener.starting', {
     trading_engine_url: getTradingEngineBaseUrl(),
-    target_id: TARGET_ID || null
+    settings_file: SETTINGS_FILE
 });
 
 const client = new Client({
@@ -185,11 +503,13 @@ client.on('ready', () => {
 
 client.on('message_create', async (msg) => {
     try {
-        await logTraffic(msg);
+        const traffic = await logTraffic(msg);
 
-        if (TARGET_ID && msg.from !== TARGET_ID) return;
+        if (!shouldProcessMessage(msg, traffic)) return;
 
         if (msg.body.includes('כניסה לעסקה') || msg.body.includes('הקסעל הסינכ')) {
+            rememberSignalChat(traffic);
+
             logEvent('signal.message_detected', {
                 from: msg.from,
                 to: msg.to,

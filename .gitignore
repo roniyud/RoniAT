@@ -10,6 +10,7 @@ node_modules/
 *.db-shm
 *.db-wal
 services/trading-engine/storage/*.json
+apps/whatsapp-listener/config/settings.json
 
 # Build outputs
 dist/
